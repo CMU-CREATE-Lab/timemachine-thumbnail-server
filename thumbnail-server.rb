@@ -1,9 +1,7 @@
 #!/usr/bin/env ruby
 
 # Next steps:
-# Caching
-#   fix tmpfile
-# Implement format
+# Whitelist for time machine host to mitigate potential ffmpeg security issues
 # Implement BoundsLTRB
 # Figure out mp4 seek problem with ffmpeg
 
