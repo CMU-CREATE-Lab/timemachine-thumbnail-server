@@ -46,10 +46,12 @@ begin
 
   format = cgi.params['format'][0] || 'jpg'
 
+  recompute = cgi.params.has_key? 'recompute'
+
   hash = Digest::SHA512.hexdigest(ENV['QUERY_STRING'])
   
   cache_file = "#{cache_dir}/#{hash[0...3]}/#{hash}.#{format}"
-  if File.exists?(cache_file)
+  if File.exists?(cache_file) and not recompute
     STDERR.puts "Found in cache."
     debug << "Found in cache."
   else
@@ -147,9 +149,19 @@ begin
       
       tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.webm"
       debug << "subsample #{subsample}, tile #{tile_bounds} #{tile_url} contains #{bounds}? #{tile_bounds.contains bounds}<br>"
-      if tile_bounds.contains bounds
-        crop = (bounds - tile_bounds.min) / subsample
+      if tile_bounds.contains bounds or level == 0
         debug << "Best tile: #{tile_coord}, level: #{level} (subsample: #{subsample})<br>"
+
+        tile_coord.x = [tile_coord.x, 0].max
+        tile_coord.y = [tile_coord.y, 0].max
+        tile_coord.x = [tile_coord.x, r['level_info'][level]['cols'] - 1].min
+        tile_coord.y = [tile_coord.y, r['level_info'][level]['rows'] - 1].min
+
+        tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
+                                 (tile_coord * tile_spacing + video_size) * subsample)
+        tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.webm"
+
+        crop = (bounds - tile_bounds.min) / subsample
         debug << "Tile url: #{tile_url}<br>"
         debug << "Tile crop: #{crop}<br>"
         break
@@ -167,7 +179,15 @@ begin
     tmpfile = "#{cache_file}.tmp-#{Process.pid}.#{format}"
     FileUtils.mkdir_p(File.dirname(tmpfile))
     
-    cmd = "#{ffmpeg_path} -y -ss #{time} -i #{tile_url} -vf 'crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}' -vframes 1 -qscale 2 '#{tmpfile}'"
+    # ffmpeg ignores negative crop bounds.  So if we have a negative crop bound, 
+    # pad the upper left and offset the crop
+    pad_size = video_size
+    pad_tl = Point.new([0, -(crop.min.x.floor)].max,
+                       [0, -(crop.min.y.floor)].max)
+    crop = crop + pad_tl
+    pad_size = pad_size + pad_tl
+    
+    cmd = "#{ffmpeg_path} -y -ss #{time} -i #{tile_url} -vf 'pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}' -vframes 1 -qscale 2 '#{tmpfile}'"
     
     debug << "Running: '#{cmd}'<br>"
     system(cmd) or raise "Error executing '#{cmd}'"
