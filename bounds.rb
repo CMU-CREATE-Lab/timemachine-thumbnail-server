@@ -25,6 +25,10 @@ class Bounds
     Bounds.new(min - rhs, max - rhs)
   end
 
+  def +(rhs)
+    Bounds.new(min + rhs, max + rhs)
+  end
+
   def floor
     Bounds.new(min.floor, max.floor)
   end
