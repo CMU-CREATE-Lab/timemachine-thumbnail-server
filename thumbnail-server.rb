@@ -20,12 +20,12 @@ require 'cgi'
 require 'open-uri'
 require 'digest'
 require 'fileutils'
-load File.dirname(File.readlink(__FILE__)) + '/mercator.rb'
-load File.dirname(File.readlink(__FILE__)) + '/point.rb'
-load File.dirname(File.readlink(__FILE__)) + '/bounds.rb'
+load File.dirname(File.realpath(__FILE__)) + '/mercator.rb'
+load File.dirname(File.realpath(__FILE__)) + '/point.rb'
+load File.dirname(File.realpath(__FILE__)) + '/bounds.rb'
 
-cache_dir = "/Users/rsargent/tmp/thumbnail-server-cache"
-ffmpeg_path = "#{File.dirname(File.dirname(File.readlink(__FILE__)))}/tilestacktool/ffmpeg/osx/ffmpeg"
+cache_dir = "/usr4/web/timemachine-api.cmucreatelab.org/thumbnail-server/cache"
+ffmpeg_path = "ffmpeg"
 
 cgi = CGI.new
 
