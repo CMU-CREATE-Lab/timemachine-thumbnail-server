@@ -31,6 +31,16 @@ cgi = CGI.new
 
 debug = []
 
+
+def parse_bounds(cgi, key)
+  if not cgi.params.has_key?(key)
+    return false
+  end
+  bounds = cgi.params[key][-1].split(',').map(&:to_f)
+  bounds.size == 4 or raise "#{key} was specified without the required 4 coords separated by commas"
+  bounds
+end
+
 begin
   debug << "<html><body>"
   debug << "<pre>"
@@ -83,25 +93,34 @@ begin
     # Parse bounds
     #
     
-    # TODO(rsargent): parse coordinates
     timemachine_width = r['width']
     timemachine_height = r['height']
     debug << "timemachine dims: #{timemachine_width} x #{timemachine_height}<br>"
-    
-    projection_bounds = tm['projection-bounds'] or raise "#{tm_url} missing projection-bounds"
-    projection = MercatorProjection.new(projection_bounds, timemachine_width, timemachine_height)
-    debug << "projection-bounds: #{JSON.dump(projection_bounds)}<br>"
-    
-    boundsNWSE = cgi.params['boundsNWSE'][0].split(',').map{|x| x.to_f}
-    boundsNWSE.size == 4 or raise "boundsNWSE must be specified and have 4 coords separated by commas"
-    debug << "boundsNWSE: #{boundsNWSE.join(', ')}<br>"
-    ne = projection.latlngToPoint({'lat' => boundsNWSE[0], 'lng' => boundsNWSE[1]})
-    sw = projection.latlngToPoint({'lat' => boundsNWSE[2], 'lng' => boundsNWSE[3]})
-    
-    
-    bounds = Bounds.new(Point.new(ne['x'], ne['y']), Point.new(sw['x'], sw['y']))
+
+    boundsNWSE = parse_bounds(cgi, 'boundsNWSE')
+    boundsLTRB = parse_bounds(cgi, 'boundsLTRB')
+
+    boundsNWSE and boundsLTRB and raise "Exactly one of boundsNWSE and boundsLTRB must be specified, but both were"
+    !boundsNWSE and !boundsLTRB and raise "Exactly one of boundsNWSE and boundsLTRB must be specified, but neither was"
+
+    if boundsNWSE
+      projection_bounds = tm['projection-bounds'] or raise "boundsNWSE were specified, but #{tm_url} is missing projection-bounds"
+
+      projection = MercatorProjection.new(projection_bounds, timemachine_width, timemachine_height)
+      debug << "projection-bounds: #{JSON.dump(projection_bounds)}<br>"
+      
+      debug << "boundsNWSE: #{boundsNWSE.join(', ')}<br>"
+      ne = projection.latlngToPoint({'lat' => boundsNWSE[0], 'lng' => boundsNWSE[1]})
+      sw = projection.latlngToPoint({'lat' => boundsNWSE[2], 'lng' => boundsNWSE[3]})
+      
+      bounds = Bounds.new(Point.new(ne['x'], ne['y']), Point.new(sw['x'], sw['y']))
+      
+    else
+      bounds = Bounds.new(Point.new(boundsLTRB[0], boundsLTRB[1]),
+                          Point.new(boundsLTRB[2], boundsLTRB[3]))
+    end
+
     input_aspect_ratio = bounds.size.x.to_f / bounds.size.y
-    
     debug << "bounds: #{bounds}<br>"
     
     #
