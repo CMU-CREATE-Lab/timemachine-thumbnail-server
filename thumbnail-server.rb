@@ -24,8 +24,19 @@ load File.dirname(File.realpath(__FILE__)) + '/mercator.rb'
 load File.dirname(File.realpath(__FILE__)) + '/point.rb'
 load File.dirname(File.realpath(__FILE__)) + '/bounds.rb'
 
-cache_dir = "/usr4/web/timemachine-api.cmucreatelab.org/thumbnail-server/cache"
-ffmpeg_path = "ffmpeg"
+cache_dir = File.dirname(File.realpath(__FILE__)) + '/cache'
+
+ffmpeg_path = nil
+
+ffmpeg_candidates = ["/usr/bin/ffmpeg", File.dirname(File.realpath(__FILE__)) + '/../tilestacktool/ffmpeg/osx/ffmpeg']
+ffmpeg_candidates.each do |candidate|
+  if File.exists? candidate
+    ffmpeg_path = candidate
+    break
+  end
+end
+
+ffmpeg_path or raise "Can't find ffmpeg in #{ffmpeg_candidates}"
 
 cgi = CGI.new
 
@@ -193,9 +204,9 @@ begin
     #
     
     # frameTime defaults to 0
-    time = cgi.params['frameTime'][0] || 0
+    time = (cgi.params['frameTime'][0] || 0).to_f
     if r.has_key?('leader')
-      leader_seconds = r['leader'] / r['fps']
+      leader_seconds = r['leader'] / r['fps'].to_f
       debug << "Adding #{leader_seconds} seconds of leader"
       time += leader_seconds
     end
