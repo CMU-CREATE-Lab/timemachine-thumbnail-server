@@ -194,6 +194,11 @@ begin
     
     # frameTime defaults to 0
     time = cgi.params['frameTime'][0] || 0
+    if r.has_key?('leader')
+      leader_seconds = r['leader'] / r['fps']
+      debug << "Adding #{leader_seconds} seconds of leader"
+      time += leader_seconds
+    end
 
     tmpfile = "#{cache_file}.tmp-#{Process.pid}.#{format}"
     FileUtils.mkdir_p(File.dirname(tmpfile))
