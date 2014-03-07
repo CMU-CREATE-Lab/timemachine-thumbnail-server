@@ -30,7 +30,7 @@ cache_dir = File.dirname(File.realpath(__FILE__)) + '/cache'
 
 ffmpeg_path = nil
 
-ffmpeg_candidates = ["/usr/bin/ffmpeg", File.dirname(File.realpath(__FILE__)) + '/../tilestacktool/ffmpeg/osx/ffmpeg']
+ffmpeg_candidates = ['/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg', File.dirname(File.realpath(__FILE__)) + '/../tilestacktool/ffmpeg/osx/ffmpeg']
 ffmpeg_candidates.each do |candidate|
   if File.exists? candidate
     ffmpeg_path = candidate
