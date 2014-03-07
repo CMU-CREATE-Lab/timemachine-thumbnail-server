@@ -256,7 +256,8 @@ begin
     
     if format == 'jpg'
       # compression quality;  lower is higher quality
-      cmd += ' -q:v 2'
+      #cmd += ' -q:v 2'
+      cmd += ' -qscale 2' # older syntax
     end
 
     if is_image && nframes != 1
