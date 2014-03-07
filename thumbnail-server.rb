@@ -13,6 +13,8 @@
 
 # Rondonia http://localhost/cgi-bin/thumbnail?root=http%3A%2F%2Fearthengine.google.org%2Ftimelapse%2Fdata%2F20130507&boundsNWSE=-8.02999,-65.51147,-13.56390,-59.90845&width=200&frameTime=2.8
 
+# Rondonia samples over time: http://localhost/cgi-bin/thumbnail?root=http%3A%2F%2Fearthengine.google.org%2Ftimelapse%2Fdata%2F20130507&boundsNWSE=-10,-63,-11,-62&width=1&height=2&nframes=29&format=rgb24
+
 # Cache design:
 #   Hash URL using 
 require 'json'
@@ -66,6 +68,8 @@ begin
   debug << "root: #{root}<br>"
 
   format = cgi.params['format'][0] || 'jpg'
+
+  nframes = cgi.params['nframes'][0] || 1
 
   recompute = cgi.params.has_key? 'recompute'
 
@@ -139,9 +143,9 @@ begin
     #
     
     output_width = cgi.params['width'][0]
-    output_width &&= output_width.to_f
+    output_width &&= output_width.to_i
     output_height = cgi.params['height'][0]
-    output_height &&= output_height.to_f
+    output_height &&= output_height.to_i
     
     if !output_width && !output_height
       raise "Must specify at least one of 'width' and 'height'"
@@ -159,20 +163,38 @@ begin
     else
       output_width = (output_height * input_aspect_ratio).round
     end
+
+    debug << "output size: #{output_width}px x #{output_height}px<br>"
     
     #
     # Search for tile
     #
     
     tile_url = crop = nil
+
+    output_subsample = [bounds.size.x / output_width, bounds.size.y / output_height].max
+
+    debug << "output_subsample: #{output_subsample}<br>"
+    
+    # ffmpeg refuses to subsample more than this?
+    maximum_ffmpeg_subsample = 64
     
     tile_spacing = Point.new(r['tile_width'], r['tile_height'])
     video_size = Point.new(r['video_width'], r['video_height'])
-    
+
+    # Start from highest level (most detailed) and "zoom out" until a tile is found
+    # to completely cover the requested area
     r['nlevels'].times do |i|
       subsample = 1 << i
       tile_coord = (bounds.min / subsample / tile_spacing).floor
       level = r['nlevels'] - i - 1
+
+      # Reject level if it would require subsampling more than ffmpeg allows
+      required_subsample = output_subsample / subsample
+      if required_subsample > maximum_ffmpeg_subsample
+        debug << "level #{level} would have required tile to be subsampled by #{required_subsample}, rejecting<br>"
+        next
+      end
       
       tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
                                (tile_coord * tile_spacing + video_size) * subsample)
@@ -221,9 +243,28 @@ begin
                        [0, -(crop.min.y.floor)].max)
     crop = crop + pad_tl
     pad_size = pad_size + pad_tl
+
+    cmd = "#{ffmpeg_path} -y -ss #{time} -i #{tile_url} -vf 'pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}' -vframes #{nframes}"
+
+    raw_formats = ['rgb24']
+    is_image = true
     
-    cmd = "#{ffmpeg_path} -y -ss #{time} -i #{tile_url} -vf 'pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}' -vframes 1 -qscale 2 '#{tmpfile}'"
+    if raw_formats.include? format
+      cmd += " -f rawvideo -pix_fmt #{format}"
+      is_image = false
+    end
     
+    if format == 'jpg'
+      # compression quality;  lower is higher quality
+      cmd += ' -q:v 2'
+    end
+
+    if is_image && nframes != 1
+      raise "nframes must be omitted or set to 1 when outputting an image"
+    end
+
+    cmd += " '#{tmpfile}'"
+
     debug << "Running: '#{cmd}'<br>"
     system(cmd) or raise "Error executing '#{cmd}'"
     File.rename tmpfile, cache_file
@@ -244,7 +285,8 @@ begin
       'png' => 'image/png'
     }
     image = open(cache_file) {|i| i.read}
-    cgi.out("type"=> mime_types[format]) {image}
+    mime_type = mime_types[format] || 'application/octet-stream'
+    cgi.out("type"=> mime_type) {image}
   end
   
 rescue Exception => e
