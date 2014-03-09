@@ -69,6 +69,8 @@ begin
 
   format = cgi.params['format'][0] || 'jpg'
 
+  tile_format = cgi.params['tileFormat'][0] || 'webm'
+
   nframes = cgi.params['nframes'][0] || 1
 
   recompute = cgi.params.has_key? 'recompute'
@@ -146,18 +148,25 @@ begin
     output_width &&= output_width.to_i
     output_height = cgi.params['height'][0]
     output_height &&= output_height.to_i
-    
+
+    ignore_aspect_ratio = cgi.params.has_key? 'ignoreAspectRatio'
+
     if !output_width && !output_height
       raise "Must specify at least one of 'width' and 'height'"
     elsif output_width && output_height
-      #
-      # output aspect ratio was specified.  Tweak input bounds to match output aspect ratio, by selecting
-      # new bounds with the same center and area as original.
-      #
-      output_aspect_ratio = output_width.to_f / output_height
-      aspect_factor = Math.sqrt(output_aspect_ratio / input_aspect_ratio)
-      bounds = Bounds.with_center(bounds.center, 
-                                  Point.new(bounds.size.x * aspect_factor, bounds.size.y / aspect_factor))
+      if  !ignore_aspect_ratio
+        #
+        # output aspect ratio was specified.  Tweak input bounds to match output aspect ratio, by selecting
+        # new bounds with the same center and area as original.
+        #
+        output_aspect_ratio = output_width.to_f / output_height
+        aspect_factor = Math.sqrt(output_aspect_ratio / input_aspect_ratio)
+        bounds = Bounds.with_center(bounds.center, 
+                                    Point.new(bounds.size.x * aspect_factor, bounds.size.y / aspect_factor))
+        debug << "Modified bounds to #{bounds} to preserve aspect ratio<br>"
+      else
+        debug << "width, height, ignoreAspectRatio all specified;  using width and height as specified<br>"
+      end
     elsif output_width
       output_height = (output_width / input_aspect_ratio).round
     else
@@ -199,7 +208,7 @@ begin
       tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
                                (tile_coord * tile_spacing + video_size) * subsample)
       
-      tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.webm"
+      tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{tile_format}"
       debug << "subsample #{subsample}, tile #{tile_bounds} #{tile_url} contains #{bounds}? #{tile_bounds.contains bounds}<br>"
       if tile_bounds.contains bounds or level == 0
         debug << "Best tile: #{tile_coord}, level: #{level} (subsample: #{subsample})<br>"
@@ -211,7 +220,7 @@ begin
 
         tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
                                  (tile_coord * tile_spacing + video_size) * subsample)
-        tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.webm"
+        tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{tile_format}"
 
         crop = (bounds - tile_bounds.min) / subsample
         debug << "Tile url: #{tile_url}<br>"
@@ -229,7 +238,7 @@ begin
     time = (cgi.params['frameTime'][0] || 0).to_f
     if r.has_key?('leader')
       leader_seconds = r['leader'] / r['fps'].to_f
-      debug << "Adding #{leader_seconds} seconds of leader"
+      debug << "Adding #{leader_seconds} seconds of leader<br>"
       time += leader_seconds
     end
 
@@ -246,7 +255,7 @@ begin
 
     cmd = "#{ffmpeg_path} -y -ss #{time} -i #{tile_url} -vf 'pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}' -vframes #{nframes}"
 
-    raw_formats = ['rgb24']
+    raw_formats = ['rgb24', 'gray8']
     is_image = true
     
     if raw_formats.include? format
@@ -267,7 +276,13 @@ begin
     cmd += " '#{tmpfile}'"
 
     debug << "Running: '#{cmd}'<br>"
-    system(cmd) or raise "Error executing '#{cmd}'"
+    output = `#{cmd} 2>&1`;
+    if not $?.success?
+      debug << "ffmpeg failed with output:<br>"
+      debug << "<pre>#{output}</pre>"
+      raise "Error executing '#{cmd}'"
+    end
+
     File.rename tmpfile, cache_file
     
     #
@@ -287,13 +302,12 @@ begin
     }
     image = open(cache_file) {|i| i.read}
     mime_type = mime_types[format] || 'application/octet-stream'
-    cgi.out("type"=> mime_type) {image}
+    cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image}
   end
   
 rescue Exception => e
   debug.insert 0, "400: Bad Request<br>"
   debug.insert 2, "<pre>#{e}\n#{e.backtrace.join("\n")}</pre>"
   debug.insert 3, "<hr>"
-  cgi.out("status" => "BAD_REQUEST") {debug.join('')}
+  cgi.out('status' => 'BAD_REQUEST', 'Access-Control-Allow-Origin' => '*') {debug.join('')}
 end
-
