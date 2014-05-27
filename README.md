@@ -1,4 +1,4 @@
-For API documentation, see "Thumbnail Service API" at https://docs.google.com/document/d/1WjCOWnu9jzjdSCnjPMQ8IqfsRabOPNyIeeQa1I_uNSo/edit#
+For API documentation, see "Thumbnail Service API" at https://docs.google.com/document/d/1NUT2UiNOPcni0WJ2PnMHl7VqBiWWw5R3jOfwqjw6_jk/edit#heading=h.1totuqfbycgg
 
 To install:
 - Edit cache_dir and ffmpeg_path in thumbnail-server.rb
