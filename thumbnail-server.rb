@@ -16,7 +16,7 @@
 # Rondonia samples over time: http://localhost/cgi-bin/thumbnail?root=http%3A%2F%2Fearthengine.google.org%2Ftimelapse%2Fdata%2F20130507&boundsNWSE=-10,-63,-11,-62&width=1&height=2&nframes=29&format=rgb24
 
 # Cache design:
-#   Hash URL using 
+#   Hash URL using
 require 'json'
 require 'cgi'
 require 'open-uri'
@@ -27,6 +27,8 @@ load File.dirname(File.realpath(__FILE__)) + '/point.rb'
 load File.dirname(File.realpath(__FILE__)) + '/bounds.rb'
 
 cache_dir = File.dirname(File.realpath(__FILE__)) + '/cache'
+
+filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 
 ffmpeg_path = nil
 
@@ -62,7 +64,7 @@ begin
   debug << JSON.pretty_generate(cgi.params)
   debug << "</pre>"
   debug << "<hr>"
-  
+
   root = cgi.params['root'][0] or raise "Missing 'root' param"
   root = root.sub(/\/$/, '')
   debug << "root: #{root}<br>"
@@ -76,7 +78,7 @@ begin
   recompute = cgi.params.has_key? 'recompute'
 
   hash = Digest::SHA512.hexdigest(ENV['QUERY_STRING'])
-  
+
   cache_file = "#{cache_dir}/#{hash[0...3]}/#{hash}.#{format}"
   if File.exists?(cache_file) and not recompute
     STDERR.puts "Found in cache."
@@ -86,30 +88,30 @@ begin
     #
     # Fetch tm.json
     #
-    
+
     tm_url = "#{root}/tm.json"
     debug << "tm_url: #{tm_url}<br>"
     tm = open(tm_url) {|i| JSON.parse(i.read)}
     debug << JSON.dump(tm)
     debug << "<hr>"
-    
+
     # Use first dataset if there are multiple
     dataset = tm['datasets'][0]
-    
+
     #
     # Fetch r.json
     #
-    
+
     r_url = "#{root}/#{dataset['id']}/r.json"
     debug << "r_url: #{r_url}<br>"
     r = open(r_url) {|i| JSON.parse(i.read)}
     debug << JSON.dump(r)
     debug << "<br>"
-    
+
     #
     # Parse bounds
     #
-    
+
     timemachine_width = r['width']
     timemachine_height = r['height']
     debug << "timemachine dims: #{timemachine_width} x #{timemachine_height}<br>"
@@ -125,13 +127,13 @@ begin
 
       projection = MercatorProjection.new(projection_bounds, timemachine_width, timemachine_height)
       debug << "projection-bounds: #{JSON.dump(projection_bounds)}<br>"
-      
+
       debug << "boundsNWSE: #{boundsNWSE.join(', ')}<br>"
       ne = projection.latlngToPoint({'lat' => boundsNWSE[0], 'lng' => boundsNWSE[1]})
       sw = projection.latlngToPoint({'lat' => boundsNWSE[2], 'lng' => boundsNWSE[3]})
-      
+
       bounds = Bounds.new(Point.new(ne['x'], ne['y']), Point.new(sw['x'], sw['y']))
-      
+
     else
       bounds = Bounds.new(Point.new(boundsLTRB[0], boundsLTRB[1]),
                           Point.new(boundsLTRB[2], boundsLTRB[3]))
@@ -139,11 +141,11 @@ begin
 
     input_aspect_ratio = bounds.size.x.to_f / bounds.size.y
     debug << "bounds: #{bounds}<br>"
-    
+
     #
     # Requested output size
     #
-    
+
     output_width = cgi.params['width'][0]
     output_width &&= output_width.to_i
     output_height = cgi.params['height'][0]
@@ -161,7 +163,7 @@ begin
         #
         output_aspect_ratio = output_width.to_f / output_height
         aspect_factor = Math.sqrt(output_aspect_ratio / input_aspect_ratio)
-        bounds = Bounds.with_center(bounds.center, 
+        bounds = Bounds.with_center(bounds.center,
                                     Point.new(bounds.size.x * aspect_factor, bounds.size.y / aspect_factor))
         debug << "Modified bounds to #{bounds} to preserve aspect ratio<br>"
       else
@@ -174,20 +176,20 @@ begin
     end
 
     debug << "output size: #{output_width}px x #{output_height}px<br>"
-    
+
     #
     # Search for tile
     #
-    
+
     tile_url = crop = nil
 
     output_subsample = [bounds.size.x / output_width, bounds.size.y / output_height].max
 
     debug << "output_subsample: #{output_subsample}<br>"
-    
+
     # ffmpeg refuses to subsample more than this?
     maximum_ffmpeg_subsample = 64
-    
+
     tile_spacing = Point.new(r['tile_width'], r['tile_height'])
     video_size = Point.new(r['video_width'], r['video_height'])
 
@@ -204,10 +206,10 @@ begin
         debug << "level #{level} would have required tile to be subsampled by #{required_subsample}, rejecting<br>"
         next
       end
-      
+
       tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
                                (tile_coord * tile_spacing + video_size) * subsample)
-      
+
       tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{tile_format}"
       debug << "subsample #{subsample}, tile #{tile_bounds} #{tile_url} contains #{bounds}? #{tile_bounds.contains bounds}<br>"
       if tile_bounds.contains bounds or level == 0
@@ -229,23 +231,24 @@ begin
       end
     end
     crop or raise "Didn't find containing tile"
-    
+
     #
     # Construct ffmpeg invocation
     #
-    
+
     # frameTime defaults to 0
     time = (cgi.params['frameTime'][0] || 0).to_f
     if r.has_key?('leader')
-      leader_seconds = r['leader'] / r['fps'].to_f
+      # FIXME: fractional leaders...
+      leader_seconds = r['leader'].floor() / r['fps'].to_f
       debug << "Adding #{leader_seconds} seconds of leader<br>"
       time += leader_seconds
     end
 
     tmpfile = "#{cache_file}.tmp-#{Process.pid}.#{format}"
     FileUtils.mkdir_p(File.dirname(tmpfile))
-    
-    # ffmpeg ignores negative crop bounds.  So if we have a negative crop bound, 
+
+    # ffmpeg ignores negative crop bounds.  So if we have a negative crop bound,
     # pad the upper left and offset the crop
     pad_size = video_size
     pad_tl = Point.new([0, -(crop.min.x.floor)].max,
@@ -257,17 +260,36 @@ begin
 
     raw_formats = ['rgb24', 'gray8']
     is_image = true
-    
+
     if raw_formats.include? format
       cmd += " -f rawvideo -pix_fmt #{format}"
       is_image = false
     end
-    
+
     if format == 'jpg'
       # compression quality;  lower is higher quality
       #cmd += ' -q:v 2'
       cmd += ' -qscale 2' # older syntax
     end
+
+    #
+    # Insert filter, if any
+    #
+    #
+    filter = cgi.params['filter'][0]
+    if filter
+      if not /^[\w-]+$/.match(filter)
+        raise "Sorry, filter name '#{filter}' must consist only of a-z 0-9 _ -"
+      end
+      filter_path = filter_dir + "/" + filter
+      if not File.exist? filter_path
+        raise "Sorry, filter named '#{filter}' does not seem to exist in the filter path"
+      end
+      # pipe:1 makes ffmpeg output to stdout
+      cmd += " pipe:1 | #{filter_path} --width #{output_width} --height #{output_height} > "
+      format = 'json' # TODO: can the filter tell us its output format?
+    end
+
 
     if is_image && nframes != 1
       raise "nframes must be omitted or set to 1 when outputting an image"
@@ -284,27 +306,29 @@ begin
     end
 
     File.rename tmpfile, cache_file
-    
+
     #
     # Done
     #
   end
-    
+
   debug_mode = cgi.params.has_key? 'debug'
-  
+
   if debug_mode
     debug << "</body></html>"
     cgi.out {debug.join('')}
   else
     mime_types = {
       'jpg' => 'image/jpeg',
-      'png' => 'image/png'
+      'png' => 'image/png',
+      'json' => 'application/json'
+
     }
     image = open(cache_file) {|i| i.read}
     mime_type = mime_types[format] || 'application/octet-stream'
     cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image}
   end
-  
+
 rescue Exception => e
   debug.insert 0, "400: Bad Request<br>"
   debug.insert 2, "<pre>#{e}\n#{e.backtrace.join("\n")}</pre>"
