@@ -32,7 +32,7 @@ filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 
 ffmpeg_path = nil
 
-ffmpeg_candidates = ['/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg', File.dirname(File.realpath(__FILE__)) + '/../tilestacktool/ffmpeg/osx/ffmpeg']
+ffmpeg_candidates = ['/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg', '/opt/local/bin/ffmpeg', File.dirname(File.realpath(__FILE__)) + '/../tilestacktool/ffmpeg/osx/ffmpeg']
 ffmpeg_candidates.each do |candidate|
   if File.exists? candidate
     ffmpeg_path = candidate
@@ -45,7 +45,6 @@ ffmpeg_path or raise "Can't find ffmpeg in #{ffmpeg_candidates}"
 cgi = CGI.new
 
 debug = []
-
 
 def parse_bounds(cgi, key)
   if not cgi.params.has_key?(key)
@@ -77,12 +76,19 @@ begin
 
   recompute = cgi.params.has_key? 'recompute'
 
-  hash = Digest::SHA512.hexdigest(ENV['QUERY_STRING'])
+  if ENV['QUERY_STRING']
+    # Running in CGI mode;  enable cache
+    hash = Digest::SHA512.hexdigest(ENV['QUERY_STRING'])
+    cache_file = "#{cache_dir}/#{hash[0...3]}/#{hash}.#{format}"
+  else
+    # Running from commandline;  don't cache
+    cache_file = nil
+  end
 
-  cache_file = "#{cache_dir}/#{hash[0...3]}/#{hash}.#{format}"
-  if File.exists?(cache_file) and not recompute
+  if cache_file and File.exists?(cache_file) and not recompute
     STDERR.puts "Found in cache."
     debug << "Found in cache."
+    image_data = open(cache_file) {|i| i.read}
   else
     STDERR.puts "Not found in cache; computing"
     #
@@ -238,6 +244,8 @@ begin
 
     # frameTime defaults to 0
     time = (cgi.params['frameTime'][0] || 0).to_f
+    # Reduce time by 99% of the size of a frame
+    time -= (1.0 / r['fps'].to_f) * 0.99
     if r.has_key?('leader')
       # FIXME: fractional leaders...
       leader_seconds = r['leader'].floor() / r['fps'].to_f
@@ -245,7 +253,12 @@ begin
       time += leader_seconds
     end
 
-    tmpfile = "#{cache_file}.tmp-#{Process.pid}.#{format}"
+    if cache_file
+      tmpfile = "#{cache_file}.tmp-#{Process.pid}.#{format}"
+    else
+      tmpfile = "/tmp/thumbnail-server-#{Process.pid}.#{format}"
+    end
+
     FileUtils.mkdir_p(File.dirname(tmpfile))
 
     # ffmpeg ignores negative crop bounds.  So if we have a negative crop bound,
@@ -255,7 +268,11 @@ begin
                        [0, -(crop.min.y.floor)].max)
     crop = crop + pad_tl
     pad_size = pad_size + pad_tl
-
+    
+    if time < 0
+      time = 0
+    end
+    
     cmd = "#{ffmpeg_path} -y -ss #{time} -i #{tile_url} -vf 'pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}' -vframes #{nframes}"
 
     raw_formats = ['rgb24', 'gray8']
@@ -305,7 +322,13 @@ begin
       raise "Error executing '#{cmd}'"
     end
 
-    File.rename tmpfile, cache_file
+    image_data = open(tmpfile) {|i| i.read}
+
+    if cache_file
+      File.rename tmpfile, cache_file
+    else
+      File.unlink tmpfile
+    end
 
     #
     # Done
@@ -317,16 +340,18 @@ begin
   if debug_mode
     debug << "</body></html>"
     cgi.out {debug.join('')}
-  else
+  elsif not cache_file
+    print image_data
+    exit 0
+  else 
     mime_types = {
       'jpg' => 'image/jpeg',
       'png' => 'image/png',
       'json' => 'application/json'
 
     }
-    image = open(cache_file) {|i| i.read}
     mime_type = mime_types[format] || 'application/octet-stream'
-    cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image}
+    cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image_data}
   end
 
 rescue Exception => e
