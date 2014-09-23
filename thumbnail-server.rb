@@ -268,11 +268,11 @@ begin
                        [0, -(crop.min.y.floor)].max)
     crop = crop + pad_tl
     pad_size = pad_size + pad_tl
-    
+
     if time < 0
       time = 0
     end
-    
+
     cmd = "#{ffmpeg_path} -y -ss #{time} -i #{tile_url} -vf 'pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}' -vframes #{nframes}"
 
     raw_formats = ['rgb24', 'gray8']
@@ -288,6 +288,15 @@ begin
       #cmd += ' -q:v 2'
       cmd += ' -qscale 2' # older syntax
     end
+
+    if format == 'gif'
+      is_image = false
+    end
+
+    if is_image && nframes != 1
+      raise "nframes must be omitted or set to 1 when outputting an image"
+    end
+
 
     #
     # Insert filter, if any
@@ -307,10 +316,18 @@ begin
       format = 'json' # TODO: can the filter tell us its output format?
     end
 
-
-    if is_image && nframes != 1
-      raise "nframes must be omitted or set to 1 when outputting an image"
+    #
+    # Animated gif
+    #
+    #
+    if format == 'gif'
+      delay = cgi.params['delay'][0] ||	20
+      # pipe:1 makes ffmpeg output to stdout
+      cmd += " -f image2pipe -vcodec ppm - | /usr/bin/convert -delay #{delay} -loop 0 - "
+      format = 'gif'
     end
+
+
 
     cmd += " '#{tmpfile}'"
 
@@ -343,12 +360,12 @@ begin
   elsif not cache_file
     print image_data
     exit 0
-  else 
+  else
     mime_types = {
       'jpg' => 'image/jpeg',
       'png' => 'image/png',
-      'json' => 'application/json'
-
+      'json' => 'application/json',
+      'gif' => 'image/gif'
     }
     mime_type = mime_types[format] || 'application/octet-stream'
     cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image_data}
