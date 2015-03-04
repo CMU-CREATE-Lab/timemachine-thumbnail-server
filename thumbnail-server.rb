@@ -64,6 +64,12 @@ begin
   debug << "</pre>"
   debug << "<hr>"
 
+  if cgi.params.has_key? 'test'
+    test_html = File.open(File.dirname(File.realpath(__FILE__)) + '/test.html').read
+    cgi.out('Access-Control-Allow-Origin' => '*') {test_html}
+    exit
+  end
+
   root = cgi.params['root'][0] or raise "Missing 'root' param"
   root = root.sub(/\/$/, '')
   debug << "root: #{root}<br>"
@@ -273,7 +279,14 @@ begin
       time = 0
     end
 
-    cmd = "#{ffmpeg_path} -y -ss #{time} -i #{tile_url} -vf 'pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}' -vframes #{nframes}"
+    label = ''
+    if cgi.params.has_key? 'label'
+      txt = cgi.params['label'][0]
+      txt.gsub!(/\:/, '.')
+      label = ",drawtext=fontfile=./DroidSans.ttf:#{txt}:fontsize=20:fontcolor=yellow:x=50:y=20"
+    end
+
+    cmd = "#{ffmpeg_path} -y -ss #{sprintf('%.2f', time)} -i #{tile_url} -vf 'pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}#{label}' -vframes #{nframes}"
 
     raw_formats = ['rgb24', 'gray8']
     is_image = true
@@ -289,11 +302,11 @@ begin
       cmd += ' -qscale 2' # older syntax
     end
 
-    if format == 'gif'
+    if format == 'gif' or format == 'mp4'
       is_image = false
     end
-
-    if is_image && nframes != 1
+    collapse = cgi.params.has_key? 'collapse'
+    if is_image && nframes != 1 && !collapse
       raise "nframes must be omitted or set to 1 when outputting an image"
     end
 
@@ -324,10 +337,27 @@ begin
       delay = cgi.params['delay'][0] ||	20
       # pipe:1 makes ffmpeg output to stdout
       cmd += " -f image2pipe -vcodec ppm - | /usr/bin/convert -delay #{delay} -loop 0 - "
-      format = 'gif'
     end
 
+    #
+    # mp4
+    #
+    #
+    if format == 'mp4'
+      delay = cgi.params['delay'][0] ||	20
+      # pipe:1 makes ffmpeg output to stdout
+      #cmd += " -r 5 -c:v libx264 -preset slow -crf 22 "
+      cmd += " -c:v libx264 -preset slow -crf 22 "
+    end
 
+    #
+    # Add images into one
+    #
+    #
+
+    if collapse
+      cmd += " -f image2pipe -vcodec ppm - | /usr/bin/convert -evaluate-sequence min - "
+    end
 
     cmd += " '#{tmpfile}'"
 
@@ -359,18 +389,21 @@ begin
     cgi.out {debug.join('')}
   elsif not cache_file
     print image_data
-    exit 0
+    exit
   else
     mime_types = {
+      'gif' => 'image/gif',
       'jpg' => 'image/jpeg',
-      'png' => 'image/png',
       'json' => 'application/json',
-      'gif' => 'image/gif'
+      'mp4' => 'video/mp4',
+      'png' => 'image/png'
     }
     mime_type = mime_types[format] || 'application/octet-stream'
     cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image_data}
   end
 
+rescue SystemExit
+  # ignore
 rescue Exception => e
   debug.insert 0, "400: Bad Request<br>"
   debug.insert 2, "<pre>#{e}\n#{e.backtrace.join("\n")}</pre>"
