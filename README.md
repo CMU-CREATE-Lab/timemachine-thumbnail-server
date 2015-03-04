@@ -17,12 +17,14 @@ http://timemachine-api.cmucreatelab.org/thumbnail?root=http://explorables.cmucre
 API
 ---
 
-```http://timemachine-api.cmucreatelab.org/thumbnail?```_[flags]_
+http://timemachine-api.cmucreatelab.org/thumbnail?_[flags]_
 
-```root=```_rootUrl_
-Root URL for time machine JSON and tiles.  The file ```tm.json``` should be found at _rootUrl_```/tm.json```.  rootUrl should not contain a trailing ‘/’.
+`root=`_rootUrl_
 
-```boundsLTRB=```_left,top,right,bottom_
+Root URL for time machine JSON and tiles.  The file `tm.json` should be found at _rootUrl_`/tm.json`.  rootUrl should not contain a trailing ‘/’.
+
+`boundsLTRB=`_left,top,right,bottom_
+
 Source bounds for thumbnail, in the pixel coordinates of the time machine.  Must specify either this or ```boundsNWSE```.
 
 ```boundsNWSE=```_north,west,south,east_
