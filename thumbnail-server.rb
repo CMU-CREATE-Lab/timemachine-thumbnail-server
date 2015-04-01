@@ -79,6 +79,7 @@ begin
   tile_format = cgi.params['tileFormat'][0] || 'webm'
 
   nframes = cgi.params['nframes'][0] || 1
+  nframes = nframes.to_i
 
   recompute = cgi.params.has_key? 'recompute'
 
@@ -187,6 +188,10 @@ begin
       output_width = (output_height * input_aspect_ratio).round
     end
 
+    # Ensure that the width and height are multiples of 2 for ffmpeg
+    output_width = ((output_width - 1) / 2 + 1) * 2
+    output_height = ((output_height - 1) / 2 + 1) * 2
+
     debug << "output size: #{output_width}px x #{output_height}px<br>"
 
     #
@@ -279,17 +284,81 @@ begin
       time = 0
     end
 
-    label = ''
-    if cgi.params.has_key? 'label'
-      txt = cgi.params['label'][0]
-      txt.gsub!(/\:/, '.')
-      label = ",drawtext=fontfile=./DroidSans.ttf:#{txt}:fontsize=20:fontcolor=yellow:x=50:y=20"
+    is_image = true
+    is_video = (format == 'mp4' or format == 'webm') ? true : false
+
+    #
+    # Fps for video output
+    #
+    #
+    video_output_fps = ""
+    if is_video and cgi.params.has_key? 'delay'
+      desired_fps = cgi.params['delay'][0]
+      raise "Output fps is required and must be greater than 0" unless desired_fps
+      video_output_fps = "-r #{desired_fps}"
     end
 
-    cmd = "#{ffmpeg_path} -y -ss #{sprintf('%.2f', time)} -i #{tile_url} -vf 'pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}#{label}' -vframes #{nframes}"
+    #
+    # Labels
+    #
+    #
+    label = ''
+
+    if cgi.params.has_key? 'labelsFromDataset' or cgi.params.has_key? 'labels'
+      frame_labels = []
+
+      # Label attribute order: color|size|x-pos|y-pos
+      label_attributes = (cgi.params.has_key? 'labelAttributes') ? cgi.params['labelAttributes'][0].split("|") : []
+      raise "Label attributes specified, but none provided" if label_attributes.empty? and cgi.params.has_key? 'labelAttributes'
+      label_color = (label_attributes[0] and (((label_attributes[0].length == 8 and label_attributes[0].start_with?("0x")) or label_attributes[0] != 'null'))) ? label_attributes[0] : "yellow"
+      label_size = (label_attributes[1] and (label_attributes[1].to_i.to_s == label_attributes[1]) and label_attributes[1] != 'null') ? label_attributes[1] : "20"
+      label_x_pos = (label_attributes[2] and (label_attributes[2].to_i.to_s == label_attributes[2]) and label_attributes[2] != 'null') ? label_attributes[2] : "10"
+      label_y_pos = (label_attributes[3] and (label_attributes[3].to_i.to_s == label_attributes[3]) and label_attributes[3] != 'null') ? label_attributes[3] : "10"
+
+      label += ",\""
+      label += "drawtext=fontfile=./DroidSans.ttf:fontsize=#{label_size}:fontcolor=#{label_color}:x=#{label_x_pos}:y=#{label_y_pos}"
+
+      if cgi.params.has_key? 'labelsFromDataset'
+        frame_labels = tm['capture-times']
+        raise "Capture times are missing for this dataset" if !frame_labels or frame_labels.empty?
+        starting_index = ((time - leader_seconds) * r['fps']).ceil
+        frame_labels = frame_labels[starting_index, nframes]
+      else
+        txt = cgi.params['labels'][0]
+        raise "Need to include at least one label in the list" if txt.empty?
+        frame_labels = txt.split("|")
+      end
+
+      raise "#{frame_labels.length} labels found, which is not enough to cover the #{nframes} frames requested" if frame_labels.length > 1 and frame_labels.length < nframes
+
+      label_cmds = ''
+      video_frame_rate = desired_fps || r['fps']
+      frame_length = nframes / video_frame_rate.to_f / nframes
+      timestamp = 0
+      frame_label_cmd_file = tmpfile + ".cmd"
+      frame_labels.each_with_index do |time_text, index|
+        # Need to escape colons for ffmpeg
+        time_text.gsub!(/\:/, "\\:")
+        # Cannot get quotes to work properly, so throw them out so that no ffmpeg errors are raised
+        time_text.gsub!(/'|"/, "")
+        label += ":text='#{time_text}'" if index == 0
+        if index > 0
+          label += ",sendcmd=f='#{frame_label_cmd_file}'"
+          label_cmds += "#{timestamp} drawtext reinit 'text=#{time_text}';"
+          timestamp += frame_length
+        end
+      end
+      # We are using sendcmd=f (load commands from file) rather than sendcmd=c (read from commandline) because of the limited
+      # number of characters that Windows allows via the commandline, but more generally, because this list can get very long
+      # no matter the OS and escaping special chars/spaces in both ffmpeg and ruby-land is also a bit of a nightmare.
+      File.open(frame_label_cmd_file, 'w') { |file| file.write(label_cmds) } if frame_labels.length > 1
+
+      label += "\""
+    end
+
+    cmd = "#{ffmpeg_path} -y #{video_output_fps} -ss #{sprintf('%.2f', time)} -i #{tile_url} -vf pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}#{label} -vframes #{nframes}"
 
     raw_formats = ['rgb24', 'gray8']
-    is_image = true
 
     if raw_formats.include? format
       cmd += " -f rawvideo -pix_fmt #{format}"
@@ -302,14 +371,13 @@ begin
       cmd += ' -qscale 2' # older syntax
     end
 
-    if format == 'gif' or format == 'mp4'
+    if format == 'gif' or is_video
       is_image = false
     end
     collapse = cgi.params.has_key? 'collapse'
     if is_image && nframes != 1 && !collapse
       raise "nframes must be omitted or set to 1 when outputting an image"
     end
-
 
     #
     # Insert filter, if any
@@ -334,32 +402,30 @@ begin
     #
     #
     if format == 'gif'
-      delay = cgi.params['delay'][0] ||	20
-      # pipe:1 makes ffmpeg output to stdout
+      delay = cgi.params['delay'][0] || 20
       cmd += " -f image2pipe -vcodec ppm - | /usr/bin/convert -delay #{delay} -loop 0 - "
     end
 
     #
-    # mp4
+    # video (mp4/webm)
     #
     #
     if format == 'mp4'
-      delay = cgi.params['delay'][0] ||	20
-      # pipe:1 makes ffmpeg output to stdout
-      #cmd += " -r 5 -c:v libx264 -preset slow -crf 22 "
       cmd += " -c:v libx264 -preset slow -crf 22 "
+    elsif format == 'webm'
+      # TODO: These may not be the best webm settings
+      cmd += " -qmin 0 -qmax 34 -crf 11 -b:v 1M "
     end
 
     #
     # Add images into one
     #
     #
-
     if collapse
       cmd += " -f image2pipe -vcodec ppm - | /usr/bin/convert -evaluate-sequence min - "
     end
 
-    cmd += " '#{tmpfile}'"
+    cmd += " \"#{tmpfile}\""
 
     debug << "Running: '#{cmd}'<br>"
     output = `#{cmd} 2>&1`;
