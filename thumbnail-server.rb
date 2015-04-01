@@ -329,7 +329,9 @@ begin
         frame_labels = txt.split("|")
       end
 
-      raise "#{frame_labels.length} labels found, which is not enough to cover the #{nframes} frames requested" if frame_labels.length > 1 and frame_labels.length < nframes
+      # If we do not have enough labels to cover every frame, ensure that the last label is blank to prevent ffmpeg from
+      # repeating the last available label across the remaining frames
+      frame_labels << "" if frame_labels.length > 1 and frame_labels.length < nframes
 
       label_cmds = ''
       video_frame_rate = desired_fps || r['fps']
