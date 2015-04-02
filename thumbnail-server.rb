@@ -464,6 +464,7 @@ begin
       'jpg' => 'image/jpeg',
       'json' => 'application/json',
       'mp4' => 'video/mp4',
+      'webm' => 'video/webm',
       'png' => 'image/png'
     }
     mime_type = mime_types[format] || 'application/octet-stream'
