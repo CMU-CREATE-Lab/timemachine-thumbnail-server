@@ -97,7 +97,7 @@ Add labels to a single frame or multiple frames of the output file.
 
 Related to the frame labels mentioned above and is available if you want to use labels already provided by the dataset, since every set should already have a list of capture times.
 
-`labelAttributes=labelColor|labelSize|labelXPos|labelYPos`
+`labelAttributes=`labelColor|labelSize|labelXPos|labelYPos
 
 By default labels will be yellow, 20 pixels in size, and at position 10, 10 of the output file. If you want to change any of these, you can do so with this flag. The order of attributes must be adhered and are delimited with `|`
 
