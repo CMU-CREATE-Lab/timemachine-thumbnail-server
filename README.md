@@ -51,7 +51,11 @@ Optional number of frames to output.  Default is 1, to output a single frame.
 
 `format=`_suffix_
 
-Optional output format (`jpg`, `png`, `gif`, `mp4`, `rgb24`).  If omitted, defaults to jpg.  `mp4`, `gif`, and `rgb24` allow multiple-frame animations.  `jpg` and `png` are single-frame formats, which require nframes be omitted or set to 1.  `rgb24` packs output as 3 bytes per pixel (r, g, b), in row-major order.  
+Optional output format (`jpg`, `png`, `gif`, `mp4`, `webm`, `rgb24`).  If omitted, defaults to jpg.  `mp4`, `webm`, `gif`, and `rgb24` allow multiple-frame animations.  `jpg` and `png` are single-frame formats, which require nframes be omitted or set to 1.  `rgb24` packs output as 3 bytes per pixel (r, g, b), in row-major order.  
+
+`delay=`_delay_
+
+Change the frame rate of the output file. By default, gifs are 20 fps and videos use the fps of the source tile.
 
 `frameTime=`_timeInSeconds_
 
@@ -60,6 +64,53 @@ Optional playback time for frame, in seconds.  If omitted, defaults to 0 (first 
 `frameTimeEnd=`_timeInSeconds_
 
 Optional playback time for last frame, in seconds.  Used when outputting image sequences.  If omitted, frameTimeEnd is calculated from nframes based on frame rate of the original video source.  2014-March-07: NOT YET IMPLEMENTED
+
+`labels=`_labelList_
+
+Add labels to a single frame or multiple frames of the output file.
+
+&nbsp;&nbsp;&nbsp;&nbsp; If you want the same label across all the frames (or if you have only one frame), you can do something like:
+ 
+&nbsp;&nbsp;&nbsp;&nbsp; `labels=myLabel`
+
+&nbsp;&nbsp;&nbsp;&nbsp; If you want a different label for every frame, you can do something like:
+
+&nbsp;&nbsp;&nbsp;&nbsp; `labels=firstFrameLabel|secondFrameLabel|ThirdFrameLabel|...`
+
+&nbsp;&nbsp;&nbsp;&nbsp; Note that the labels are delimited by `|`
+
+&nbsp;&nbsp;&nbsp;&nbsp; If you want the same label for the first two frames, then nothing for two, then a new label, you can do this:
+
+&nbsp;&nbsp;&nbsp;&nbsp; `labels=firstFrameLabel|secondFrameLabel|||fifthFrameLabel|sixthFrameLabel`
+
+&nbsp;&nbsp;&nbsp;&nbsp; Note that we still use the `|` delimiter for frames where we are omitting a label.
+ 
+&nbsp;&nbsp;&nbsp;&nbsp; You can also use this trick to ensure that only the first frame of a multi frame output has a label. So for example:
+ 
+&nbsp;&nbsp;&nbsp;&nbsp; `labels=firstFrameLabel|`
+ 
+&nbsp;&nbsp;&nbsp;&nbsp; This ensures that any frames after the first one does not have a label. 
+
+&nbsp;&nbsp;&nbsp;&nbsp; If you want the same label repeated for several frames, you will have to repeat it in your list.
+
+`labelsFromDataset`
+
+Related to the frame labels mentioned above and is available if you want to use labels already provided by the dataset, since every set should already have a list of capture times.
+
+`labelAttributes=labelColor|labelSize|labelXPos|labelYPos`
+
+By default labels will be yellow, 20 pixels in size, and at position 10, 10 of the output file. If you want to change any of these, you can do so with this flag. The order of attributes must be adhered and are delimited with `|`
+
+&nbsp;&nbsp;&nbsp;&nbsp; If, for example, you wanted to change the label to white, size 18 and at position 100, 10, you can do something like:
+
+&nbsp;&nbsp;&nbsp;&nbsp; `labelAttributes=white|18|100|10`
+
+&nbsp;&nbsp;&nbsp;&nbsp; You do not have to provide all the attributes, but they must be in the order given above. If, for example, you want to 
+&nbsp;&nbsp;&nbsp;&nbsp; change only the font color and the x position, then you just leave the fields in between empty. So for example:
+
+&nbsp;&nbsp;&nbsp;&nbsp; `labelAttributes=white||100|`
+
+&nbsp;&nbsp;&nbsp;&nbsp; Note that we still include the `|` delimiter for omitted attributes in this case.
 
 **Options you shouldn’t need to use:**
 
