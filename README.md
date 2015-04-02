@@ -105,8 +105,7 @@ By default labels will be yellow, 20 pixels in size, and at position 10, 10 of t
 
 &nbsp;&nbsp;&nbsp;&nbsp; `labelAttributes=white|18|100|10`
 
-&nbsp;&nbsp;&nbsp;&nbsp; You do not have to provide all the attributes, but they must be in the order given above. If, for example, you want to 
-&nbsp;&nbsp;&nbsp;&nbsp; change only the font color and the x position, then you just leave the fields in between empty. So for example:
+&nbsp;&nbsp;&nbsp;&nbsp; You do not have to provide all the attributes, but they must be in the order given above. If, for example, you want to change only the font color and the x position, then you just leave the fields in between empty. So for example:
 
 &nbsp;&nbsp;&nbsp;&nbsp; `labelAttributes=white||100|`
 
