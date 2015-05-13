@@ -55,7 +55,7 @@ Optional output format (`jpg`, `png`, `gif`, `mp4`, `webm`, `rgb24`).  If omitte
 
 `delay=`_delay_
 
-Speed of playback, given in seconds per frame. By default, gifs are 0.05 seconds per frame (20 frames per second), and videos use the fps of the source tile.
+Speed of playback, given in frames per second. By default, gifs are 20 frames per second, and videos use the fps of the source tile.
 
 `frameTime=`_timeInSeconds_
 
