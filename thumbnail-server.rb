@@ -164,6 +164,10 @@ begin
     output_height = cgi.params['height'][0]
     output_height &&= output_height.to_i
 
+    # Min width/height allowed by ffmpeg is 46x46
+    output_width = [output_width, 46].max
+    output_height = [output_height, 46].max
+
     ignore_aspect_ratio = cgi.params.has_key? 'ignoreAspectRatio'
 
     if !output_width && !output_height
@@ -292,8 +296,8 @@ begin
     #
     #
     video_output_fps = ""
-    if is_video and cgi.params.has_key? 'delay'
-      desired_fps = cgi.params['delay'][0]
+    if is_video and cgi.params.has_key? 'fps'
+      desired_fps = cgi.params['fps'][0]
       raise "Output fps is required and must be greater than 0" unless desired_fps
       video_output_fps = "-r #{desired_fps}"
     end
@@ -310,24 +314,31 @@ begin
       # Label attribute order: color|size|x-pos|y-pos
       label_attributes = (cgi.params.has_key? 'labelAttributes') ? cgi.params['labelAttributes'][0].split("|") : []
       raise "Label attributes specified, but none provided" if label_attributes.empty? and cgi.params.has_key? 'labelAttributes'
-      label_color = (label_attributes[0] and (((label_attributes[0].length == 8 and label_attributes[0].start_with?("0x")) or label_attributes[0] != 'null'))) ? label_attributes[0] : "yellow"
-      label_size = (label_attributes[1] and (label_attributes[1].to_i.to_s == label_attributes[1]) and label_attributes[1] != 'null') ? label_attributes[1] : "20"
-      label_x_pos = (label_attributes[2] and (label_attributes[2].to_i.to_s == label_attributes[2]) and label_attributes[2] != 'null') ? label_attributes[2] : "10"
-      label_y_pos = (label_attributes[3] and (label_attributes[3].to_i.to_s == label_attributes[3]) and label_attributes[3] != 'null') ? label_attributes[3] : "10"
-
-      label += ",\""
-      label += "drawtext=fontfile=./DroidSans.ttf:fontsize=#{label_size}:fontcolor=#{label_color}:x=#{label_x_pos}:y=#{label_y_pos}"
+      label_color = (label_attributes[0] and !label_attributes[0].empty? and ((label_attributes[0].length == 8 and label_attributes[0].start_with?("0x")) or label_attributes[0] != 'null')) ? label_attributes[0] : "yellow"
+      label_size = (label_attributes[1] and !label_attributes[1].empty? and (label_attributes[1].to_i.to_s == label_attributes[1]) and label_attributes[1] != 'null') ? label_attributes[1] : "20"
+      label_x_pos = (label_attributes[2] and !label_attributes[2].empty? and (label_attributes[2].to_i.to_s == label_attributes[2]) and label_attributes[2] != 'null') ? (label_attributes[2].to_i - 1) : "9" # by default it has an x-offset of 1
+      label_y_pos = (label_attributes[3] and !label_attributes[3].empty? and (label_attributes[3].to_i.to_s == label_attributes[3]) and label_attributes[3] != 'null') ? label_attributes[3] : "12" # really should be 10, but visually 12 appears better
 
       if cgi.params.has_key? 'labelsFromDataset'
         frame_labels = tm['capture-times']
         raise "Capture times are missing for this dataset" if !frame_labels or frame_labels.empty?
         starting_index = ((time - leader_seconds) * r['fps']).ceil
         frame_labels = frame_labels[starting_index, nframes]
+        # Auto fit font if the user does not directly specify a size
+        if (label_attributes[1].nil? || label_attributes[1].empty? || label_attributes[1] == 'null')
+          # output file width - margins (i.e. left margin and always 20 margin on the right)
+          allowed_text_area_width = output_width - (label_x_pos.to_i + 20)
+          new_font_size = ((0.00000337035 * (allowed_text_area_width ** 3)) - (0.00100792 * (allowed_text_area_width ** 2)) + (0.190542 * allowed_text_area_width) - 1.31804).round
+          label_size = [20, new_font_size].min
+        end
       else
         txt = cgi.params['labels'][0]
         raise "Need to include at least one label in the list" if txt.empty?
         frame_labels = txt.split("|")
       end
+
+      label += ",\""
+      label += "drawtext=fontfile=./DroidSans.ttf:fontsize=#{label_size}:fontcolor=#{label_color}:x=#{label_x_pos}:y=#{label_y_pos}"
 
       # If we do not have enough labels to cover every frame, ensure that the last label is blank to prevent ffmpeg from
       # repeating the last available label across the remaining frames
@@ -404,7 +415,13 @@ begin
     #
     #
     if format == 'gif'
-      delay = cgi.params['delay'][0] || 20
+      if cgi.params['delay'][0] # the amount of time, in seconds, to wait between frames of the final gif
+        delay = cgi.params['delay'][0] + "/1" # in ticks per second
+      elsif cgi.params['fps'][0] # the fps of the final gif
+        delay = 100 / cgi.params['fps'][0].to_i # in centiseconds
+      else
+        delay = 20 # default 5 fps
+      end
       cmd += " -f image2pipe -vcodec ppm - | /usr/bin/convert -delay #{delay} -loop 0 - "
     end
 
