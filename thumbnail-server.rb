@@ -356,7 +356,7 @@ begin
         time_text.gsub!(/'|"/, "")
         label += ":text='#{time_text}'" if index == 0
         if index > 0
-          label += ",sendcmd=f='#{frame_label_cmd_file}'"
+          label += ",sendcmd=f='#{frame_label_cmd_file}'" if index == 1
           label_cmds += "#{timestamp} drawtext reinit 'text=#{time_text}';"
           timestamp += frame_length
         end
