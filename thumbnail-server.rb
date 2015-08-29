@@ -95,7 +95,7 @@ begin
   if cache_file and File.exists?(cache_file) and not recompute
     STDERR.puts "Found in cache."
     debug << "Found in cache."
-    image_data = open(cache_file) {|i| i.read}
+    image_data = open(cache_file, 'rb') {|i| i.read}
   else
     STDERR.puts "Not found in cache; computing"
     #
@@ -454,7 +454,7 @@ begin
       raise "Error executing '#{cmd}'"
     end
 
-    image_data = open(tmpfile) {|i| i.read}
+    image_data = open(tmpfile, 'rb') {|i| i.read}
 
     if cache_file
       File.rename tmpfile, cache_file
