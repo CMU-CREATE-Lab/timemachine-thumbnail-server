@@ -31,6 +31,7 @@ cache_dir = File.dirname(File.realpath(__FILE__)) + '/cache'
 filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 
 ffmpeg_path = nil
+num_threads = 8
 
 ffmpeg_candidates = ['/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg', '/opt/local/bin/ffmpeg', File.dirname(File.realpath(__FILE__)) + '/../tilestacktool/ffmpeg/osx/ffmpeg']
 ffmpeg_candidates.each do |candidate|
@@ -369,7 +370,7 @@ begin
       label += "\""
     end
 
-    cmd = "#{ffmpeg_path} -y #{video_output_fps} -ss #{sprintf('%.2f', time)} -i #{tile_url} -vf pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}#{label} -vframes #{nframes}"
+    cmd = "#{ffmpeg_path} -y #{video_output_fps} -ss #{sprintf('%.2f', time)} -i #{tile_url} -vf pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}#{label} -vframes #{nframes} -threads #{num_threads}"
 
     raw_formats = ['rgb24', 'gray8']
 
@@ -422,7 +423,7 @@ begin
       else
         delay = 20 # default 5 fps
       end
-      cmd += " -f image2pipe -vcodec ppm - | /usr/bin/convert -delay #{delay} -loop 0 - "
+      cmd += " -f image2pipe -vcodec ppm - | /usr/local/bin/gm convert -delay #{delay} -loop 0 - "
     end
 
     #
@@ -430,10 +431,10 @@ begin
     #
     #
     if format == 'mp4'
-      cmd += " -c:v libx264 -preset slow -crf 22 "
+      cmd += " -vcodec libx264 -preset slow -pix_fmt yuv420p -crf 20 -g 10 -bf 0 -movflags faststart "
     elsif format == 'webm'
       # TODO: These may not be the best webm settings
-      cmd += " -qmin 0 -qmax 34 -crf 11 -b:v 1M "
+      cmd += " -qmin 0 -qmax 34 -crf 10 -b:v 1M "
     end
 
     #
@@ -441,7 +442,7 @@ begin
     #
     #
     if collapse
-      cmd += " -f image2pipe -vcodec ppm - | /usr/bin/convert -evaluate-sequence min - "
+      cmd += " -f image2pipe -vcodec ppm - | /usr/local/bin/gm convert -evaluate-sequence min - "
     end
 
     cmd += " \"#{tmpfile}\""
