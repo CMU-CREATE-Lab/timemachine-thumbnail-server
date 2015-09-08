@@ -1,3 +1,5 @@
 .DS_Store
 *~
 test/temp-computed
+site.conf
+cache
