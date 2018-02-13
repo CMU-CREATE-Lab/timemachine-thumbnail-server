@@ -1,4 +1,4 @@
-#!/usr/bin/env ruby
+#!/usr/local/bin/ruby
 
 # Next steps:
 # Whitelist for time machine host to mitigate potential ffmpeg security issues
@@ -22,6 +22,9 @@ require 'cgi'
 require 'open-uri'
 require 'digest'
 require 'fileutils'
+require 'bigdecimal'
+require 'bigdecimal/util'
+
 load File.dirname(File.realpath(__FILE__)) + '/mercator.rb'
 load File.dirname(File.realpath(__FILE__)) + '/point.rb'
 load File.dirname(File.realpath(__FILE__)) + '/bounds.rb'
@@ -30,20 +33,12 @@ cache_dir = File.dirname(File.realpath(__FILE__)) + '/cache'
 
 filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 
-ffmpeg_path = nil
+ffmpeg_path = '/usr/local/bin/ffmpeg'
 num_threads = 8
 
-ffmpeg_candidates = ['/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg', '/opt/local/bin/ffmpeg', File.dirname(File.realpath(__FILE__)) + '/../tilestacktool/ffmpeg/osx/ffmpeg']
-ffmpeg_candidates.each do |candidate|
-  if File.exists? candidate
-    ffmpeg_path = candidate
-    break
-  end
-end
-
-ffmpeg_path or raise "Can't find ffmpeg in #{ffmpeg_candidates}"
-
 cgi = CGI.new
+cgi.params = CGI::parse(ENV.to_hash['REQUEST_URI'])
+cgi.params['root'] = cgi.params.delete('/thumbnail?root')
 
 debug = []
 
@@ -86,8 +81,8 @@ begin
 
   if ENV['QUERY_STRING']
     # Running in CGI mode;  enable cache
-    hash = Digest::SHA512.hexdigest(ENV['QUERY_STRING'])
-    cache_file = "#{cache_dir}/#{hash[0...3]}/#{hash}.#{format}"
+    cache_path = ENV['QUERY_STRING'].split("cachepath=")[1]
+    cache_file = "#{cache_dir}#{cache_path}"
   else
     # Running from commandline;  don't cache
     cache_file = nil
@@ -259,12 +254,20 @@ begin
     #
 
     # frameTime defaults to 0
-    time = (cgi.params['frameTime'][0] || 0).to_f
-    # Reduce time by 99% of the size of a frame
-    time -= (1.0 / r['fps'].to_f) * 0.99
+    max_time = (r['frames'] - 0.25).to_f / r['fps'].to_f
+    time = [max_time, (cgi.params['frameTime'][0] || 0).to_f].min
+    leader_seconds = 0
+
+    frame_length = (1.0 / r['fps'].to_f)
+    frame_length = (frame_length * 1000).floor / 1000.0
+
+    time = ((time.to_d / frame_length).floor * frame_length)
+
+    debug << "Time to seek to: #{time}<br>"
+
     if r.has_key?('leader')
       # FIXME: fractional leaders...
-      leader_seconds = r['leader'].floor() / r['fps'].to_f
+      leader_seconds = r['leader'].floor / r['fps'].to_f
       debug << "Adding #{leader_seconds} seconds of leader<br>"
       time += leader_seconds
     end
@@ -284,6 +287,10 @@ begin
                        [0, -(crop.min.y.floor)].max)
     crop = crop + pad_tl
     pad_size = pad_size + pad_tl
+
+    # Clamp to max size of the padded area
+    cropX = [crop.size.x.to_i, pad_size.x.to_i].min
+    cropY = [crop.size.y.to_i, pad_size.y.to_i].min
 
     if time < 0
       time = 0
@@ -323,7 +330,9 @@ begin
       if cgi.params.has_key? 'labelsFromDataset'
         frame_labels = tm['capture-times']
         raise "Capture times are missing for this dataset" if !frame_labels or frame_labels.empty?
-        starting_index = ((time - leader_seconds) * r['fps']).ceil
+        starting_index = ((time - leader_seconds) * r['fps'].to_f)
+        # Truncate to 3 decimal places then take the ceiling
+        starting_index = ((starting_index * 1000).floor / 1000.0).ceil
         frame_labels = frame_labels[starting_index, nframes]
         # Auto fit font if the user does not directly specify a size
         if (label_attributes[1].nil? || label_attributes[1].empty? || label_attributes[1] == 'null')
@@ -370,7 +379,7 @@ begin
       label += "\""
     end
 
-    cmd = "#{ffmpeg_path} -y #{video_output_fps} -ss #{sprintf('%.2f', time)} -i #{tile_url} -vf pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{crop.size.x}:#{crop.size.y}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}#{label} -vframes #{nframes} -threads #{num_threads}"
+    cmd = "#{ffmpeg_path} -y #{video_output_fps} -ss #{sprintf('%.3f', time)} -i #{tile_url} -vf pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{cropX}:#{cropY}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}#{label} -vframes #{nframes} -threads #{num_threads}"
 
     raw_formats = ['rgb24', 'gray8']
 
