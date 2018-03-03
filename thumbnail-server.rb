@@ -24,6 +24,7 @@ require 'digest'
 require 'fileutils'
 require 'bigdecimal'
 require 'bigdecimal/util'
+require 'selenium-webdriver'
 
 load File.dirname(File.realpath(__FILE__)) + '/mercator.rb'
 load File.dirname(File.realpath(__FILE__)) + '/point.rb'
@@ -35,6 +36,7 @@ filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 
 ffmpeg_path = '/usr/local/bin/ffmpeg'
 num_threads = 8
+from_screenshot = false
 
 cgi = CGI.new
 cgi.params = CGI::parse(ENV.to_hash['REQUEST_URI'])
@@ -46,7 +48,7 @@ def parse_bounds(cgi, key)
   if not cgi.params.has_key?(key)
     return false
   end
-  bounds = cgi.params[key][-1].split(',').map(&:to_f)
+  bounds = cgi.params[key][-1].gsub("02C", ",").split(',').map(&:to_f)
   bounds.size == 4 or raise "#{key} was specified without the required 4 coords separated by commas"
   bounds
 end
@@ -94,36 +96,8 @@ begin
     image_data = open(cache_file, 'rb') {|i| i.read}
   else
     STDERR.puts "Not found in cache; computing"
-    #
-    # Fetch tm.json
-    #
 
-    tm_url = "#{root}/tm.json"
-    debug << "tm_url: #{tm_url}<br>"
-    tm = open(tm_url) {|i| JSON.parse(i.read)}
-    debug << JSON.dump(tm)
-    debug << "<hr>"
-
-    # Use first dataset if there are multiple
-    dataset = tm['datasets'][0]
-
-    #
-    # Fetch r.json
-    #
-
-    r_url = "#{root}/#{dataset['id']}/r.json"
-    debug << "r_url: #{r_url}<br>"
-    r = open(r_url) {|i| JSON.parse(i.read)}
-    debug << JSON.dump(r)
-    debug << "<br>"
-
-    #
-    # Parse bounds
-    #
-
-    timemachine_width = r['width']
-    timemachine_height = r['height']
-    debug << "timemachine dims: #{timemachine_width} x #{timemachine_height}<br>"
+    from_screenshot = cgi.params.has_key?('fromScreenshot')
 
     boundsNWSE = parse_bounds(cgi, 'boundsNWSE')
     boundsLTRB = parse_bounds(cgi, 'boundsLTRB')
@@ -131,25 +105,116 @@ begin
     boundsNWSE and boundsLTRB and raise "Exactly one of boundsNWSE and boundsLTRB must be specified, but both were"
     !boundsNWSE and !boundsLTRB and raise "Exactly one of boundsNWSE and boundsLTRB must be specified, but neither was"
 
-    if boundsNWSE
-      projection_bounds = tm['projection-bounds'] or raise "boundsNWSE were specified, but #{tm_url} is missing projection-bounds"
+    if from_screenshot
+      # Convert URL encoded characters back to their original values
+      root.gsub!("023", "#")
+      root.gsub!("026", "&")
+      root.gsub!("03D", "=")
+      root.gsub!("02C", ",")
 
-      projection = MercatorProjection.new(projection_bounds, timemachine_width, timemachine_height)
-      debug << "projection-bounds: #{JSON.dump(projection_bounds)}<br>"
+      root += root.include?("#") ? "&" : "#"
+      screenshot_from_video = root.include?("blsat")
 
-      debug << "boundsNWSE: #{boundsNWSE.join(', ')}<br>"
-      ne = projection.latlngToPoint({'lat' => boundsNWSE[0], 'lng' => boundsNWSE[1]})
-      sw = projection.latlngToPoint({'lat' => boundsNWSE[2], 'lng' => boundsNWSE[3]})
+      if cgi.params.has_key?('minimalUI')
+        root += "minimalUI=true"
+      else
+        root += "disableUI=true"
+      end
 
-      bounds = Bounds.new(Point.new(ne['x'], ne['y']), Point.new(sw['x'], sw['y']))
+      options = Selenium::WebDriver::Chrome::Options.new
+      options.add_argument('--headless')
+      options.add_argument('--hide-scrollbars')
+      driver = Selenium::WebDriver.for :chrome, options: options
 
+      output_width = cgi.params['width'][0].to_i || 128
+      output_height = cgi.params['height'][0].to_i || 74
+
+      # Resize the window to desired width/height.
+      driver.manage.window.resize_to(output_width, output_height)
+
+      # Navigate to the page; will block until the load is complete.
+      # Note: Any ajax requests or large data files may not be loaded yet.
+      #       We take care of that further down when taking the actual screenshots.
+      driver.navigate.to root
+
+      # TODO: share link should include a paused state so we don't have to manually pause like this.
+      driver.execute_script("timelapse.pause()")
+      dataset_num_frames = driver.execute_script("return timelapse.getNumFrames();").to_f
+      dataset_fps = driver.execute_script("return timelapse.getFps();").to_f
+      viewer_max_playback_rate = driver.execute_script("return timelapse.getMaxPlaybackRate();").to_f
+
+      #
+      # Parse bounds
+      #
+
+      screenshot_bounds = {}
+      screenshot_bounds['bbox'] = {}
+      if boundsNWSE
+        screenshot_bounds['bbox']['ne'] = {'lat' => boundsNWSE[0], 'lng' => boundsNWSE[1]}
+        screenshot_bounds['bbox']['sw'] = {'lat' => boundsNWSE[2], 'lng' => boundsNWSE[3]}
+      else
+        screenshot_bounds['bbox']['xmin'] = boundsLTRB[0]
+        screenshot_bounds['bbox']['ymin'] = boundsLTRB[1]
+        screenshot_bounds['bbox']['xmax'] = boundsLTRB[2]
+        screenshot_bounds['bbox']['ymax'] = boundsLTRB[3]
+      end
     else
-      bounds = Bounds.new(Point.new(boundsLTRB[0], boundsLTRB[1]),
-                          Point.new(boundsLTRB[2], boundsLTRB[3]))
-    end
 
-    input_aspect_ratio = bounds.size.x.to_f / bounds.size.y
-    debug << "bounds: #{bounds}<br>"
+      #
+      # Fetch tm.json
+      #
+
+      tm_url = "#{root}/tm.json"
+      debug << "tm_url: #{tm_url}<br>"
+      tm = open(tm_url) {|i| JSON.parse(i.read)}
+      debug << JSON.dump(tm)
+      debug << "<hr>"
+
+      # Use first dataset if there are multiple
+      dataset = tm['datasets'][0]
+
+      #
+      # Fetch r.json
+      #
+
+      r_url = "#{root}/#{dataset['id']}/r.json"
+      debug << "r_url: #{r_url}<br>"
+      r = open(r_url) {|i| JSON.parse(i.read)}
+      debug << JSON.dump(r)
+      debug << "<br>"
+
+      dataset_num_frames = r['frames'].to_f
+      dataset_fps = r['fps'].to_f
+      nframes = [nframes, dataset_num_frames].min
+
+      #
+      # Parse bounds
+      #
+
+      timemachine_width = r['width']
+      timemachine_height = r['height']
+      debug << "timemachine dims: #{timemachine_width} x #{timemachine_height}<br>"
+
+      if boundsNWSE
+        projection_bounds = tm['projection-bounds'] or raise "boundsNWSE were specified, but #{tm_url} is missing projection-bounds"
+
+        projection = MercatorProjection.new(projection_bounds, timemachine_width, timemachine_height)
+        debug << "projection-bounds: #{JSON.dump(projection_bounds)}<br>"
+
+        debug << "boundsNWSE: #{boundsNWSE.join(', ')}<br>"
+        ne = projection.latlngToPoint({'lat' => boundsNWSE[0], 'lng' => boundsNWSE[1]})
+        sw = projection.latlngToPoint({'lat' => boundsNWSE[2], 'lng' => boundsNWSE[3]})
+
+        bounds = Bounds.new(Point.new(ne['x'], ne['y']), Point.new(sw['x'], sw['y']))
+
+      else
+        bounds = Bounds.new(Point.new(boundsLTRB[0], boundsLTRB[1]),
+                            Point.new(boundsLTRB[2], boundsLTRB[3]))
+      end
+
+      input_aspect_ratio = bounds.size.x.to_f / bounds.size.y
+      debug << "bounds: #{bounds}<br>"
+    end
 
     #
     # Requested output size
@@ -159,10 +224,6 @@ begin
     output_width &&= output_width.to_i
     output_height = cgi.params['height'][0]
     output_height &&= output_height.to_i
-
-    # Min width/height allowed by ffmpeg is 46x46
-    output_width = [output_width, 46].max
-    output_height = [output_height, 46].max
 
     ignore_aspect_ratio = cgi.params.has_key? 'ignoreAspectRatio'
 
@@ -175,10 +236,12 @@ begin
         # new bounds with the same center and area as original.
         #
         output_aspect_ratio = output_width.to_f / output_height
-        aspect_factor = Math.sqrt(output_aspect_ratio / input_aspect_ratio)
-        bounds = Bounds.with_center(bounds.center,
+        if not from_screenshot
+          aspect_factor = Math.sqrt(output_aspect_ratio / input_aspect_ratio)
+          bounds = Bounds.with_center(bounds.center,
                                     Point.new(bounds.size.x * aspect_factor, bounds.size.y / aspect_factor))
-        debug << "Modified bounds to #{bounds} to preserve aspect ratio<br>"
+          debug << "Modified bounds to #{bounds} to preserve aspect ratio<br>"
+        end
       else
         debug << "width, height, ignoreAspectRatio all specified;  using width and height as specified<br>"
       end
@@ -188,86 +251,38 @@ begin
       output_width = (output_height * input_aspect_ratio).round
     end
 
+    # Min width/height allowed by ffmpeg is 46x46
+    output_width = [output_width, 46].max
+    output_height = [output_height, 46].max
+
     # Ensure that the width and height are multiples of 2 for ffmpeg
     output_width = ((output_width - 1) / 2 + 1) * 2
     output_height = ((output_height - 1) / 2 + 1) * 2
 
     debug << "output size: #{output_width}px x #{output_height}px<br>"
 
-    #
-    # Search for tile
-    #
+    frame_time = cgi.params['frameTime'][0].to_f
+    start_frame = cgi.params['startFrame'][0]
 
-    tile_url = crop = nil
-
-    output_subsample = [bounds.size.x / output_width, bounds.size.y / output_height].max
-
-    debug << "output_subsample: #{output_subsample}<br>"
-
-    # ffmpeg refuses to subsample more than this?
-    maximum_ffmpeg_subsample = 64
-
-    tile_spacing = Point.new(r['tile_width'], r['tile_height'])
-    video_size = Point.new(r['video_width'], r['video_height'])
-
-    # Start from highest level (most detailed) and "zoom out" until a tile is found
-    # to completely cover the requested area
-    r['nlevels'].times do |i|
-      subsample = 1 << i
-      tile_coord = (bounds.min / subsample / tile_spacing).floor
-      level = r['nlevels'] - i - 1
-
-      # Reject level if it would require subsampling more than ffmpeg allows
-      required_subsample = output_subsample / subsample
-      if required_subsample > maximum_ffmpeg_subsample
-        debug << "level #{level} would have required tile to be subsampled by #{required_subsample}, rejecting<br>"
-        next
-      end
-
-      tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
-                               (tile_coord * tile_spacing + video_size) * subsample)
-
-      tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{tile_format}"
-      debug << "subsample #{subsample}, tile #{tile_bounds} #{tile_url} contains #{bounds}? #{tile_bounds.contains bounds}<br>"
-      if tile_bounds.contains bounds or level == 0
-        debug << "Best tile: #{tile_coord}, level: #{level} (subsample: #{subsample})<br>"
-
-        tile_coord.x = [tile_coord.x, 0].max
-        tile_coord.y = [tile_coord.y, 0].max
-        tile_coord.x = [tile_coord.x, r['level_info'][level]['cols'] - 1].min
-        tile_coord.y = [tile_coord.y, r['level_info'][level]['rows'] - 1].min
-
-        tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
-                                 (tile_coord * tile_spacing + video_size) * subsample)
-        tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{tile_format}"
-
-        crop = (bounds - tile_bounds.min) / subsample
-        debug << "Tile url: #{tile_url}<br>"
-        debug << "Tile crop: #{crop}<br>"
-        break
-      end
+    # If both frameTime and startFrame are passed in, startFrame takes precedence.
+    if start_frame
+      dataset_frame_length = (dataset_num_frames / dataset_fps) / dataset_num_frames
+      start_frame = start_frame.to_i
+      frame_time = start_frame * dataset_frame_length
+    else
+      dataset_frame_length = (dataset_num_frames / dataset_fps) / dataset_num_frames
+      start_frame = (frame_time / dataset_frame_length).floor
     end
-    crop or raise "Didn't find containing tile"
 
-    #
-    # Construct ffmpeg invocation
-    #
-
-    # frameTime defaults to 0
-    max_time = (r['frames'] - 0.25).to_f / r['fps'].to_f
-    time = [max_time, (cgi.params['frameTime'][0] || 0).to_f].min
-    leader_seconds = 0
-
-    frame_length = (1.0 / r['fps'].to_f)
-    frame_length = (frame_length * 1000).floor / 1000.0
-
-    time = ((time.to_d / frame_length).floor * frame_length)
+    max_time = (dataset_num_frames - 0.25).to_f / dataset_fps
+    time = [0, [max_time, frame_time.to_f].min].max
 
     debug << "Time to seek to: #{time}<br>"
 
-    if r.has_key?('leader')
+    leader_seconds = 0
+    if r and r.has_key?('leader')
       # FIXME: fractional leaders...
-      leader_seconds = r['leader'].floor / r['fps'].to_f
+      leader_seconds = r['leader'].floor / dataset_fps
       debug << "Adding #{leader_seconds} seconds of leader<br>"
       time += leader_seconds
     end
@@ -278,36 +293,160 @@ begin
       tmpfile = "/tmp/thumbnail-server-#{Process.pid}.#{format}"
     end
 
-    FileUtils.mkdir_p(File.dirname(tmpfile))
-
-    # ffmpeg ignores negative crop bounds.  So if we have a negative crop bound,
-    # pad the upper left and offset the crop
-    pad_size = video_size
-    pad_tl = Point.new([0, -(crop.min.x.floor)].max,
-                       [0, -(crop.min.y.floor)].max)
-    crop = crop + pad_tl
-    pad_size = pad_size + pad_tl
-
-    # Clamp to max size of the padded area
-    cropX = [crop.size.x.to_i, pad_size.x.to_i].min
-    cropY = [crop.size.y.to_i, pad_size.y.to_i].min
-
-    if time < 0
-      time = 0
-    end
+    tmpfile_root_path = File.dirname(tmpfile)
+    FileUtils.mkdir_p(tmpfile_root_path) unless File.exists?(tmpfile_root_path)
 
     is_image = true
     is_video = (format == 'mp4' or format == 'webm') ? true : false
+
+    #
+    # Take a screenshot of a page passed in as the root
+    #
+    if from_screenshot
+      begin
+        start_frame ||= 0
+
+        # TODO: Remove since this call seems to be unreliable sometimes.
+        # No need for this in the long run since the share view used on initial page load will take us to where we want.
+        # This is temporarily left here if for some reason the story tool is not using bounding box format in the share view.
+        driver.execute_script("timelapse.setNewView(#{screenshot_bounds.to_json}, true);")
+
+        # We really only need to wait at most 1 second before the loading spinner kicks in (appears after 300ms in the viewer)
+        # However, without the ability to truly poll the data rendering state, we may need to wait more,
+        # as seen with the need to increase the spinner timeout below from an initial 15 sec proposed timeout.
+        # We need a draw ready state check like we have with video tiles.
+        sleep(2)
+
+        # Wait no more than 45 seconds for the data to finish loading.
+        # Since nearly all the data is local, this should be more than enough time to load.
+        # However, because data rendering is CPU bound, the data may have loaded but we need to wait
+        # even further depending upon the size of the window being captured.
+        wait = Selenium::WebDriver::Wait.new(timeout: 45)
+        # spinnerOverlay is the class for the main spinner that comes up when any layers are still loading.
+        wait.until { !driver.find_element(:class, "spinnerOverlay").displayed? }
+
+        start_seek_time = start_frame / dataset_fps
+        seek_amount = 1.0 / dataset_fps
+        end_seek_time = start_seek_time + (nframes * seek_amount)
+
+        # Looks like we got ourselves some flow data and thus need to take into account data "inbetween" what we count as main "frame"
+        # We grab images at a rate that is equivalent to the "medium" playback speed.
+        # TODO: Let the client deterine how many interediate frames to capture
+        if (viewer_max_playback_rate < 1 && nframes > 1)
+          seek_amount = viewer_max_playback_rate / 2;
+        end
+
+        # Truncate to 2 decimal places
+        seek_amount = seek_amount.to_d.truncate(2).to_f
+        start_seek_time = start_seek_time.to_d.truncate(2).to_f
+        end_seek_time = end_seek_time.to_d.truncate(2).to_f
+
+        tmpfile_screenshot_input_path = tmpfile_root_path + "/#{Time.now.to_i}"
+        FileUtils.mkdir_p(tmpfile_screenshot_input_path) unless File.exists?(tmpfile_screenshot_input_path)
+
+        screenshot_frame_count = 0
+        seek_time = start_seek_time
+
+        # start to end *exclusive*
+        (start_seek_time...end_seek_time).step(seek_amount) do
+          debug << "seek_time: #{seek_time}<br>"
+          driver.execute_script("timelapse.seek(#{seek_time});")
+          # Wait at most 4 seconds until video framese are drawn.
+          if screenshot_from_video
+            wait = Selenium::WebDriver::Wait.new(timeout: 4)
+            wait.until { driver.execute_script("return landsatBaseMapLayer.lastDrawAllReady;") }
+          end
+          driver.save_screenshot("#{tmpfile_screenshot_input_path}/#{'%04d' % screenshot_frame_count}.png")
+          screenshot_frame_count += 1
+          seek_time = (seek_time + seek_amount).to_d.truncate(2).to_f
+        end
+        nframes = screenshot_frame_count
+      rescue Selenium::WebDriver::Error::TimeOutError
+        raise "Error taking screenshot. Data failed to load."
+      end
+
+    else
+      #
+      # Search for tile from the tile tree
+      #
+
+      tile_url = crop = nil
+
+      output_subsample = [bounds.size.x / output_width, bounds.size.y / output_height].max
+
+      debug << "output_subsample: #{output_subsample}<br>"
+
+      # ffmpeg refuses to subsample more than this?
+      maximum_ffmpeg_subsample = 64
+
+      tile_spacing = Point.new(r['tile_width'], r['tile_height'])
+      video_size = Point.new(r['video_width'], r['video_height'])
+
+      # Start from highest level (most detailed) and "zoom out" until a tile is found
+      # to completely cover the requested area
+      r['nlevels'].times do |i|
+        subsample = 1 << i
+        tile_coord = (bounds.min / subsample / tile_spacing).floor
+        level = r['nlevels'] - i - 1
+
+        # Reject level if it would require subsampling more than ffmpeg allows
+        required_subsample = output_subsample / subsample
+        if required_subsample > maximum_ffmpeg_subsample
+          debug << "level #{level} would have required tile to be subsampled by #{required_subsample}, rejecting<br>"
+          next
+        end
+
+        tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
+                                 (tile_coord * tile_spacing + video_size) * subsample)
+
+        tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{tile_format}"
+        debug << "subsample #{subsample}, tile #{tile_bounds} #{tile_url} contains #{bounds}? #{tile_bounds.contains bounds}<br>"
+        if tile_bounds.contains bounds or level == 0
+          debug << "Best tile: #{tile_coord}, level: #{level} (subsample: #{subsample})<br>"
+
+          tile_coord.x = [tile_coord.x, 0].max
+          tile_coord.y = [tile_coord.y, 0].max
+          tile_coord.x = [tile_coord.x, r['level_info'][level]['cols'] - 1].min
+          tile_coord.y = [tile_coord.y, r['level_info'][level]['rows'] - 1].min
+
+          tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
+                                   (tile_coord * tile_spacing + video_size) * subsample)
+          tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{tile_format}"
+
+          crop = (bounds - tile_bounds.min) / subsample
+          debug << "Tile url: #{tile_url}<br>"
+          debug << "Tile crop: #{crop}<br>"
+          break
+        end
+      end
+      crop or raise "Didn't find containing tile"
+
+      # ffmpeg ignores negative crop bounds.  So if we have a negative crop bound,
+      # pad the upper left and offset the crop
+      pad_size = video_size
+      pad_tl = Point.new([0, -(crop.min.x.floor)].max,
+                         [0, -(crop.min.y.floor)].max)
+      crop = crop + pad_tl
+      pad_size = pad_size + pad_tl
+
+      # Clamp to max size of the padded area
+      cropX = [crop.size.x.to_i, pad_size.x.to_i].min
+      cropY = [crop.size.y.to_i, pad_size.y.to_i].min
+    end
+
 
     #
     # Fps for video output
     #
     #
     video_output_fps = ""
-    if is_video and cgi.params.has_key? 'fps'
-      desired_fps = cgi.params['fps'][0]
-      raise "Output fps is required and must be greater than 0" unless desired_fps
-      video_output_fps = "-r #{desired_fps}"
+    desired_fps = dataset_fps
+    if cgi.params.has_key? 'fps'
+      desired_fps = cgi.params['fps'][0].to_f
+      if is_video
+        raise "Output fps is required and must be greater than 0" unless desired_fps
+        video_output_fps = "-r #{desired_fps}"
+      end
     end
 
     #
@@ -330,7 +469,7 @@ begin
       if cgi.params.has_key? 'labelsFromDataset'
         frame_labels = tm['capture-times']
         raise "Capture times are missing for this dataset" if !frame_labels or frame_labels.empty?
-        starting_index = ((time - leader_seconds) * r['fps'].to_f)
+        starting_index = ((time - leader_seconds) * dataset_fps)
         # Truncate to 3 decimal places then take the ceiling
         starting_index = ((starting_index * 1000).floor / 1000.0).ceil
         frame_labels = frame_labels[starting_index, nframes]
@@ -355,8 +494,7 @@ begin
       frame_labels << "" if frame_labels.length > 1 and frame_labels.length < nframes
 
       label_cmds = ''
-      video_frame_rate = desired_fps || r['fps']
-      frame_length = nframes / video_frame_rate.to_f / nframes
+      frame_length = nframes / desired_fps / nframes
       timestamp = 0
       frame_label_cmd_file = tmpfile + ".cmd"
       frame_labels.each_with_index do |time_text, index|
@@ -379,7 +517,25 @@ begin
       label += "\""
     end
 
-    cmd = "#{ffmpeg_path} -y #{video_output_fps} -ss #{sprintf('%.3f', time)} -i #{tile_url} -vf pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{cropX}:#{cropY}:#{crop.min.x}:#{crop.min.y},scale=#{output_width}:#{output_height}#{label} -vframes #{nframes} -threads #{num_threads}"
+    start_dwell_in_sec = cgi.params['startDwell'][0].to_f
+    end_dwell_in_sec = cgi.params['endDwell'][0].to_f
+    interpolate_frames = cgi.params.has_key?('interpolateBetweenFrames')
+
+
+    num_start_loop_frames = (desired_fps * start_dwell_in_sec).ceil
+    num_end_loop_frames = (desired_fps * end_dwell_in_sec).ceil
+    start_loop_frame = 0
+    end_loop_frame = nframes + num_start_loop_frames - 1
+
+    input_filters = ""
+    if from_screenshot
+      input_src = "-f image2 -start_number 0 -i \"#{tmpfile_screenshot_input_path}/%04d.png\" "
+    else
+      input_src = "-ss #{sprintf('%.3f', time)} -i #{tile_url} -vframes #{nframes}"
+      input_filters += "pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{cropX}:#{cropY}:#{crop.min.x}:#{crop.min.y},"
+    end
+
+    cmd = "#{ffmpeg_path} -y #{video_output_fps} #{input_src} -filter_complex \"#{input_filters}scale=#{output_width}:#{output_height}:flags=bicubic#{label}\" -threads #{num_threads}"
 
     raw_formats = ['rgb24', 'gray8']
 
@@ -464,12 +620,52 @@ begin
       raise "Error executing '#{cmd}'"
     end
 
+    #
+    # Post processing filters
+    #
+    # Really this should be part of the filter chain further up but if for some reason they result in invalid output, we have to do them after the fact...
+    #
+    # We *could* pipe this into another ffmpeg instance in the main system call above, rather than doing a new system call here, but there are some caveats.
+    # The mp4 container cannot write to streams/pipe, it needs to be able to seek back to the beginning of the output to write headers after encoding is finished,
+    # so you will get a nice ffmpeg error if you pipe the mp4 out of ffmpeg into another ffmpeg instance. What we can do however is fully fragment the mp4 output
+    # with the following flag: '-frag_keyframe+empty_moov' This will cause output to be 100% fragmented, which is what is needed to pipe the output. Without this flag,
+    # the first fragment will be muxed as a short movie (using moov) followed by the rest of the media in fragments, which results in the inability to pipe to another ffmpeg.
+    #
+    post_process_filters = ""
+
+    # Dwell time filter
+    post_process_filters += "loop=#{num_start_loop_frames}:1:#{start_loop_frame},setpts=N/FRAME_RATE/TB," if start_dwell_in_sec > 0 and (format == 'gif' or is_video)
+    post_process_filters += "loop=#{num_end_loop_frames}:1:#{end_loop_frame},setpts=N/FRAME_RATE/TB," if end_dwell_in_sec > 0 and (format == 'gif' or is_video)
+
+    # 'Fader shader' filter
+    post_process_filters += "minterpolate='mi_mode=mci:mc_mode=aobmc:vsbmc=1:fps=60'," if interpolate_frames and (format == 'gif' or is_video)
+
+    post_process_filters.chomp!(',')
+    unless post_process_filters.empty?
+      tmpfile_postprocess = "#{cache_file}.tmp-#{Process.pid}-pp.#{format}"
+      cmd = "#{ffmpeg_path} -y -i #{tmpfile} -filter_complex \"#{post_process_filters}\" -threads #{num_threads} \"#{tmpfile_postprocess}\""
+      debug << "Running post process filters: '#{cmd}'<br>"
+      output = `#{cmd} 2>&1`;
+      if not $?.success?
+        debug << "ffmpeg failed with output:<br>"
+        debug << "<pre>#{output}</pre>"
+        raise "Error executing '#{cmd}'"
+      end
+      File.delete(tmpfile)
+      tmpfile = tmpfile_postprocess
+    end
+
     image_data = open(tmpfile, 'rb') {|i| i.read}
 
     if cache_file
       File.rename tmpfile, cache_file
     else
       File.unlink tmpfile
+    end
+
+    # Cleanup screenshot work
+    if from_screenshot
+      FileUtils.rm_rf(tmpfile_screenshot_input_path)
     end
 
     #
