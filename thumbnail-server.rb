@@ -113,7 +113,10 @@ begin
       root.gsub!("02C", ",")
 
       root += root.include?("#") ? "&" : "#"
+
       screenshot_from_video = root.include?("blsat")
+
+      root_url_params = CGI::parse(root)
 
       if cgi.params.has_key?('minimalUI')
         root += "minimalUI=true"
@@ -137,11 +140,31 @@ begin
       #       We take care of that further down when taking the actual screenshots.
       driver.navigate.to root
 
-      # TODO: share link should include a paused state so we don't have to manually pause like this.
-      driver.execute_script("timelapse.pause()")
+      # Just incase
+      sleep(1)
+
+      # 0 - 100
+      screenshot_playback_speed = root_url_params.has_key?('ps') ? root_url_params['ps'][0].to_f : 50.0
+      # YYYYMMDD
+      screenshot_begin_time_as_date = root_url_params.has_key?('bt') ? root_url_params['bt'][0] : 0.0
+      # YYYYMMDD
+      screenshot_end_time_as_date = root_url_params.has_key?('et') ? root_url_params['et'][0] : driver.execute_script("return timelapse.getDuration();").to_d.truncate(1).to_f
+
+      debug << "screenshot_playback_speed: #{screenshot_playback_speed}<br>"
+      debug << "screenshot_begin_time_as_date #{screenshot_begin_time_as_date}<br>"
+      debug << "screenshot_end_time_as_date #{screenshot_end_time_as_date}<br>"
+
+      screenshot_begin_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_begin_time_as_date}')").to_f
+      screenshot_end_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_end_time_as_date}')").to_f
+
+      debug << "screenshot_begin_time_as_render_time: #{screenshot_begin_time_as_render_time}<br>"
+      debug << "screenshot_end_time_as_render_time: #{screenshot_end_time_as_render_time}<br>"
+
       dataset_num_frames = driver.execute_script("return timelapse.getNumFrames();").to_f
       dataset_fps = driver.execute_script("return timelapse.getFps();").to_f
       viewer_max_playback_rate = driver.execute_script("return timelapse.getMaxPlaybackRate();").to_f
+
+      debug << "viewer_max_playback_rate: #{viewer_max_playback_rate}<br>"
 
       #
       # Parse bounds
@@ -299,6 +322,22 @@ begin
     is_image = true
     is_video = (format == 'mp4' or format == 'webm') ? true : false
 
+
+    #
+    # Fps for video output
+    #
+    #
+    video_output_fps = ""
+    desired_fps = dataset_fps
+    if cgi.params.has_key? 'fps'
+      desired_fps = cgi.params['fps'][0].to_f
+      if is_video
+        raise "Output fps is required and must be greater than 0" unless desired_fps
+        video_output_fps = "-r #{desired_fps}"
+      end
+    end
+
+
     #
     # Take a screenshot of a page passed in as the root
     #
@@ -312,9 +351,7 @@ begin
         driver.execute_script("timelapse.setNewView(#{screenshot_bounds.to_json}, true);")
 
         # We really only need to wait at most 1 second before the loading spinner kicks in (appears after 300ms in the viewer)
-        # However, without the ability to truly poll the data rendering state, we may need to wait more,
-        # as seen with the need to increase the spinner timeout below from an initial 15 sec proposed timeout.
-        # We need a draw ready state check like we have with video tiles.
+        # However, I've seen it take slightly longer.
         sleep(2)
 
         # Wait no more than 45 seconds for the data to finish loading.
@@ -325,42 +362,27 @@ begin
         # spinnerOverlay is the class for the main spinner that comes up when any layers are still loading.
         wait.until { !driver.find_element(:class, "spinnerOverlay").displayed? }
 
-        start_seek_time = start_frame / dataset_fps
-        seek_amount = 1.0 / dataset_fps
-        end_seek_time = start_seek_time + (nframes * seek_amount)
-
-        # Looks like we got ourselves some flow data and thus need to take into account data "inbetween" what we count as main "frame"
-        # We grab images at a rate that is equivalent to the "medium" playback speed.
-        # TODO: Let the client deterine how many interediate frames to capture
-        if (viewer_max_playback_rate < 1 && nframes > 1)
-          seek_amount = viewer_max_playback_rate / 2;
-        end
-
-        # Truncate to 2 decimal places
-        seek_amount = seek_amount.to_d.truncate(2).to_f
-        start_seek_time = start_seek_time.to_d.truncate(2).to_f
-        end_seek_time = end_seek_time.to_d.truncate(2).to_f
-
         tmpfile_screenshot_input_path = tmpfile_root_path + "/#{Time.now.to_i}"
         FileUtils.mkdir_p(tmpfile_screenshot_input_path) unless File.exists?(tmpfile_screenshot_input_path)
 
-        screenshot_frame_count = 0
-        seek_time = start_seek_time
+        # TODO: Should no longer be needed
+        driver.execute_script("timelapse.pause();")
 
-        # start to end *exclusive*
-        (start_seek_time...end_seek_time).step(seek_amount) do
+        screenshot_playback_rate = (100.0 / screenshot_playback_speed)
+        video_duration_in_secs = (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) /  (viewer_max_playback_rate / screenshot_playback_rate)
+        nframes = (video_duration_in_secs * desired_fps).ceil
+
+        nframes.times do |screenshot_frame_count|
+          debug << "frame #{screenshot_frame_count} out of #{nframes}"
+          seek_time = (screenshot_frame_count.to_f / (nframes.to_f - 1.0)) * (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) + screenshot_begin_time_as_render_time
+          STDERR.puts("seek to: #{seek_time}")
           debug << "seek_time: #{seek_time}<br>"
           driver.execute_script("timelapse.seek(#{seek_time});")
-          # Wait at most 4 seconds until video framese are drawn.
-          if screenshot_from_video
-            wait = Selenium::WebDriver::Wait.new(timeout: 4)
-            wait.until { driver.execute_script("return landsatBaseMapLayer.lastDrawAllReady;") }
-          end
+          # Wait at most 10 seconds until we assume things are drawn
+          wait = Selenium::WebDriver::Wait.new(timeout: 10)
+          wait.until { driver.execute_script("return timelapse.lastFrameCompletelyDrawn;") }
           driver.save_screenshot("#{tmpfile_screenshot_input_path}/#{'%04d' % screenshot_frame_count}.png")
-          screenshot_frame_count += 1
-          seek_time = (seek_time + seek_amount).to_d.truncate(2).to_f
         end
-        nframes = screenshot_frame_count
       rescue Selenium::WebDriver::Error::TimeOutError
         raise "Error taking screenshot. Data failed to load."
       end
@@ -432,21 +454,6 @@ begin
       # Clamp to max size of the padded area
       cropX = [crop.size.x.to_i, pad_size.x.to_i].min
       cropY = [crop.size.y.to_i, pad_size.y.to_i].min
-    end
-
-
-    #
-    # Fps for video output
-    #
-    #
-    video_output_fps = ""
-    desired_fps = dataset_fps
-    if cgi.params.has_key? 'fps'
-      desired_fps = cgi.params['fps'][0].to_f
-      if is_video
-        raise "Output fps is required and must be greater than 0" unless desired_fps
-        video_output_fps = "-r #{desired_fps}"
-      end
     end
 
     #
