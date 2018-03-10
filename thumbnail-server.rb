@@ -322,6 +322,12 @@ begin
     is_image = true
     is_video = (format == 'mp4' or format == 'webm') ? true : false
 
+    raw_formats = ['rgb24', 'gray8']
+
+    if raw_formats.include? format or format == 'gif' or is_video
+      is_image = false
+    end
+
 
     #
     # Fps for video output
@@ -370,11 +376,11 @@ begin
 
         screenshot_playback_rate = (100.0 / screenshot_playback_speed)
         video_duration_in_secs = (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) /  (viewer_max_playback_rate / screenshot_playback_rate)
-        nframes = (video_duration_in_secs * desired_fps).ceil
+        nframes = is_image ? 1 : (video_duration_in_secs * desired_fps).ceil
 
         nframes.times do |screenshot_frame_count|
           debug << "frame #{screenshot_frame_count} out of #{nframes}"
-          seek_time = (screenshot_frame_count.to_f / (nframes.to_f - 1.0)) * (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) + screenshot_begin_time_as_render_time
+          seek_time = (screenshot_frame_count.to_f / [1.0, (nframes.to_f - 1.0)].max) * (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) + screenshot_begin_time_as_render_time
           STDERR.puts("seek to: #{seek_time}")
           debug << "seek_time: #{seek_time}<br>"
           driver.execute_script("timelapse.seek(#{seek_time});")
@@ -544,11 +550,8 @@ begin
 
     cmd = "#{ffmpeg_path} -y #{video_output_fps} #{input_src} -filter_complex \"#{input_filters}scale=#{output_width}:#{output_height}:flags=bicubic#{label}\" -threads #{num_threads}"
 
-    raw_formats = ['rgb24', 'gray8']
-
     if raw_formats.include? format
       cmd += " -f rawvideo -pix_fmt #{format}"
-      is_image = false
     end
 
     if format == 'jpg'
@@ -557,9 +560,6 @@ begin
       cmd += ' -qscale 2' # older syntax
     end
 
-    if format == 'gif' or is_video
-      is_image = false
-    end
     collapse = cgi.params.has_key? 'collapse'
     if is_image && nframes != 1 && !collapse
       raise "nframes must be omitted or set to 1 when outputting an image"
@@ -588,6 +588,7 @@ begin
     #
     #
     if format == 'gif'
+      # Note: As of 2012, browsers like Safari and IE do not properly render a gif that is faster than 16fps
       if cgi.params['delay'][0] # the amount of time, in seconds, to wait between frames of the final gif
         delay = cgi.params['delay'][0] + "/1" # in ticks per second
       elsif cgi.params['fps'][0] # the fps of the final gif
