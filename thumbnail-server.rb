@@ -90,12 +90,16 @@ begin
     cache_file = nil
   end
 
+  def vlog(shardno, msg)
+    STDERR.write("#{Time.now.strftime('%Y-%m-%d %H:%M:%S')} THUMB #{Process.pid}:#{shardno} #{msg}\n")
+  end
+  
   if cache_file and File.exists?(cache_file) and not recompute
-    STDERR.puts "Found in cache."
+    vlog(0, "Found in cache.")
     debug << "Found in cache."
     image_data = open(cache_file, 'rb') {|i| i.read}
   else
-    STDERR.puts "Not found in cache; computing"
+    vlog(0, "Not found in cache; computing.")
 
     from_screenshot = cgi.params.has_key?('fromScreenshot')
 
@@ -106,6 +110,34 @@ begin
     !boundsNWSE and !boundsLTRB and raise "Exactly one of boundsNWSE and boundsLTRB must be specified, but neither was"
 
     if from_screenshot
+      Selenium::WebDriver.logger.output = STDERR
+      #Selenium::WebDriver.logger.level = :info
+
+      def queue_pop_nonblock(queue)
+        begin
+          return queue.pop(non_block=true)
+        rescue ThreadError
+          return nil
+        end
+      end
+      
+      def make_chrome(shardno, url, output_width, output_height)
+        before = Time.now
+        options = Selenium::WebDriver::Chrome::Options.new
+        options.add_argument('--headless')
+        options.add_argument('--hide-scrollbars')
+        driver = Selenium::WebDriver.for :chrome, options: options
+        
+        # Resize the window to desired width/height.
+        driver.manage.window.resize_to(output_width, output_height)
+        # Navigate to the page; will block until the load is complete.
+        # Note: Any ajax requests or large data files may not be loaded yet.
+        #       We take care of that further down when taking the actual screenshots.
+        driver.navigate.to url
+        vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
+        return driver
+      end
+
       # Convert URL encoded characters back to their original values
       root.gsub!("023", "#")
       root.gsub!("026", "&")
@@ -124,21 +156,9 @@ begin
         root += "disableUI=true"
       end
 
-      options = Selenium::WebDriver::Chrome::Options.new
-      options.add_argument('--headless')
-      options.add_argument('--hide-scrollbars')
-      driver = Selenium::WebDriver.for :chrome, options: options
-
       output_width = cgi.params['width'][0].to_i || 128
       output_height = cgi.params['height'][0].to_i || 74
-
-      # Resize the window to desired width/height.
-      driver.manage.window.resize_to(output_width, output_height)
-
-      # Navigate to the page; will block until the load is complete.
-      # Note: Any ajax requests or large data files may not be loaded yet.
-      #       We take care of that further down when taking the actual screenshots.
-      driver.navigate.to root
+      driver = make_chrome(0, root, output_width, output_height)
 
       # Just incase
       sleep(1)
@@ -347,6 +367,10 @@ begin
     #
     # Take a screenshot of a page passed in as the root
     #
+
+
+
+    
     if from_screenshot
       begin
         start_frame ||= 0
@@ -378,21 +402,81 @@ begin
         video_duration_in_secs = (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) /  (viewer_max_playback_rate / screenshot_playback_rate)
         nframes = is_image ? 1 : (video_duration_in_secs * desired_fps).ceil
 
-        nframes.times do |screenshot_frame_count|
-          debug << "frame #{screenshot_frame_count} out of #{nframes}"
-          seek_time = (screenshot_frame_count.to_f / [1.0, (nframes.to_f - 1.0)].max) * (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) + screenshot_begin_time_as_render_time
-          STDERR.puts("seek to: #{seek_time}")
-          debug << "seek_time: #{seek_time}<br>"
-          driver.execute_script("timelapse.seek(#{seek_time});")
-          # Wait at most 10 seconds until we assume things are drawn
-          wait = Selenium::WebDriver::Wait.new(timeout: 10)
-          wait.until { driver.execute_script("return timelapse.lastFrameCompletelyDrawn;") }
-          driver.save_screenshot("#{tmpfile_screenshot_input_path}/#{'%04d' % screenshot_frame_count}.png")
+        vlog(0, "Need to compute #{nframes} frames")
+        frame_queue = Queue.new
+        (0 ... nframes).each { |i| frame_queue << i }
+        
+        # Capture frames from ... to-1
+        new_capture_frames_thread = ->(shardno, driver) {
+          return Thread.new {
+            vlog(shardno, "Shard starting");
+
+            while true do
+              frame = queue_pop_nonblock(frame_queue)
+              if frame == nil
+                break
+              end
+              if not driver then
+                frame_queue << frame
+                driver = make_chrome(shardno, root, output_width, output_height)
+                frame = queue_pop_nonblock(frame_queue)
+                if frame == nil
+                  break
+                end
+              end
+              seek_time = (frame.to_f / (nframes.to_f - 1.0)) * (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) + screenshot_begin_time_as_render_time
+              vlog(shardno, "frame #{frame} seeking to: #{seek_time}")
+              
+              before = Time.now
+              driver.execute_script("timelapse.seek(#{seek_time});")
+              # Wait at most 15 seconds until we assume things are drawn
+              
+              while true do
+                if (Time.now - before) > 30
+                  vlog(shardno, "giving up on frame #{frame} after #{((Time.now - before) * 1000).round}ms; stopping driver")
+                  frame_queue << frame
+                  driver.quit
+                  driver = nil
+                  break
+                end
+                if driver.execute_script("return timelapse.lastFrameCompletelyDrawn;")
+                  driver.save_screenshot("#{tmpfile_screenshot_input_path}/#{'%04d' % frame}.png")
+                  vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms");
+                  break
+                end
+              end
+            end
+            vlog(shardno, "Shard finished");
+            if driver then
+              driver.quit
+            end
+          }
+        }
+        
+        nshards = (nframes / 5).floor
+        if nshards < 1
+          nshards = 1
         end
+        if nshards > 4
+          nshards = 4
+        end
+                      
+        shard_threads = []
+
+        (0 ... nshards).each do |shardno|
+          if shardno == 0
+            thread_driver = driver
+          else
+            thread_driver = nil
+          end
+          shard_threads << new_capture_frames_thread.call(shardno, thread_driver)
+        end
+        
+        shard_threads.each { |shard_thread| shard_thread.join }
+        
       rescue Selenium::WebDriver::Error::TimeOutError
         raise "Error taking screenshot. Data failed to load."
       end
-
     else
       #
       # Search for tile from the tile tree
@@ -664,6 +748,7 @@ begin
     end
 
     image_data = open(tmpfile, 'rb') {|i| i.read}
+    vlog(0, "Video finished, #{image_data.size} bytes")
 
     if cache_file
       File.rename tmpfile, cache_file
