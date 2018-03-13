@@ -424,7 +424,7 @@ begin
                   break
                 end
               end
-              seek_time = (frame.to_f / (nframes.to_f - 1.0)) * (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) + screenshot_begin_time_as_render_time
+              seek_time = (frame.to_f / [1.0, (nframes.to_f - 1.0)].max) * (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) + screenshot_begin_time_as_render_time
               vlog(shardno, "frame #{frame} seeking to: #{seek_time}")
               
               before = Time.now
