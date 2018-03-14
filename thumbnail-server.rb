@@ -93,7 +93,7 @@ begin
   def vlog(shardno, msg)
     STDERR.write("#{Time.now.strftime('%Y-%m-%d %H:%M:%S')} THUMB #{Process.pid}:#{shardno} #{msg}\n")
   end
-  
+
   if cache_file and File.exists?(cache_file) and not recompute
     vlog(0, "Found in cache.")
     debug << "Found in cache."
@@ -120,14 +120,14 @@ begin
           return nil
         end
       end
-      
-      def make_chrome(shardno, url, output_width, output_height)
+
+      def make_chrome(shardno, url, output_width, output_height, screenshot_bounds)
         before = Time.now
         options = Selenium::WebDriver::Chrome::Options.new
         options.add_argument('--headless')
         options.add_argument('--hide-scrollbars')
         driver = Selenium::WebDriver.for :chrome, options: options
-        
+
         # Resize the window to desired width/height.
         driver.manage.window.resize_to(output_width, output_height)
         # Navigate to the page; will block until the load is complete.
@@ -135,6 +135,15 @@ begin
         #       We take care of that further down when taking the actual screenshots.
         driver.navigate.to url
         vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
+
+        # Just in case
+        sleep(1)
+
+        driver.execute_script("timelapse.setNewView(#{screenshot_bounds.to_json}, true);")
+
+        # Just in case
+        sleep(1)
+
         return driver
       end
 
@@ -158,10 +167,24 @@ begin
 
       output_width = cgi.params['width'][0].to_i || 128
       output_height = cgi.params['height'][0].to_i || 74
-      driver = make_chrome(0, root, output_width, output_height)
 
-      # Just incase
-      sleep(1)
+      #
+      # Parse bounds
+      #
+
+      screenshot_bounds = {}
+      screenshot_bounds['bbox'] = {}
+      if boundsNWSE
+        screenshot_bounds['bbox']['ne'] = {'lat' => boundsNWSE[0], 'lng' => boundsNWSE[1]}
+        screenshot_bounds['bbox']['sw'] = {'lat' => boundsNWSE[2], 'lng' => boundsNWSE[3]}
+      else
+        screenshot_bounds['bbox']['xmin'] = boundsLTRB[0]
+        screenshot_bounds['bbox']['ymin'] = boundsLTRB[1]
+        screenshot_bounds['bbox']['xmax'] = boundsLTRB[2]
+        screenshot_bounds['bbox']['ymax'] = boundsLTRB[3]
+      end
+
+      driver = make_chrome(0, root, output_width, output_height, screenshot_bounds)
 
       # 0 - 100
       screenshot_playback_speed = root_url_params.has_key?('ps') ? root_url_params['ps'][0].to_f : 50.0
@@ -185,22 +208,6 @@ begin
       viewer_max_playback_rate = driver.execute_script("return timelapse.getMaxPlaybackRate();").to_f
 
       debug << "viewer_max_playback_rate: #{viewer_max_playback_rate}<br>"
-
-      #
-      # Parse bounds
-      #
-
-      screenshot_bounds = {}
-      screenshot_bounds['bbox'] = {}
-      if boundsNWSE
-        screenshot_bounds['bbox']['ne'] = {'lat' => boundsNWSE[0], 'lng' => boundsNWSE[1]}
-        screenshot_bounds['bbox']['sw'] = {'lat' => boundsNWSE[2], 'lng' => boundsNWSE[3]}
-      else
-        screenshot_bounds['bbox']['xmin'] = boundsLTRB[0]
-        screenshot_bounds['bbox']['ymin'] = boundsLTRB[1]
-        screenshot_bounds['bbox']['xmax'] = boundsLTRB[2]
-        screenshot_bounds['bbox']['ymax'] = boundsLTRB[3]
-      end
     else
 
       #
@@ -367,36 +374,13 @@ begin
     #
     # Take a screenshot of a page passed in as the root
     #
-
-
-
-    
+    #
     if from_screenshot
       begin
         start_frame ||= 0
 
-        # TODO: Remove since this call seems to be unreliable sometimes.
-        # No need for this in the long run since the share view used on initial page load will take us to where we want.
-        # This is temporarily left here if for some reason the story tool is not using bounding box format in the share view.
-        driver.execute_script("timelapse.setNewView(#{screenshot_bounds.to_json}, true);")
-
-        # We really only need to wait at most 1 second before the loading spinner kicks in (appears after 300ms in the viewer)
-        # However, I've seen it take slightly longer.
-        sleep(2)
-
-        # Wait no more than 45 seconds for the data to finish loading.
-        # Since nearly all the data is local, this should be more than enough time to load.
-        # However, because data rendering is CPU bound, the data may have loaded but we need to wait
-        # even further depending upon the size of the window being captured.
-        wait = Selenium::WebDriver::Wait.new(timeout: 45)
-        # spinnerOverlay is the class for the main spinner that comes up when any layers are still loading.
-        wait.until { !driver.find_element(:class, "spinnerOverlay").displayed? }
-
-        tmpfile_screenshot_input_path = tmpfile_root_path + "/#{Time.now.to_i}"
+        tmpfile_screenshot_input_path = tmpfile_root_path + "/#{(Time.now.to_f*1000).to_i}"
         FileUtils.mkdir_p(tmpfile_screenshot_input_path) unless File.exists?(tmpfile_screenshot_input_path)
-
-        # TODO: Should no longer be needed
-        driver.execute_script("timelapse.pause();")
 
         screenshot_playback_rate = (100.0 / screenshot_playback_speed)
         video_duration_in_secs = (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) /  (viewer_max_playback_rate / screenshot_playback_rate)
@@ -405,7 +389,7 @@ begin
         vlog(0, "Need to compute #{nframes} frames")
         frame_queue = Queue.new
         (0 ... nframes).each { |i| frame_queue << i }
-        
+
         # Capture frames from ... to-1
         new_capture_frames_thread = ->(shardno, driver) {
           return Thread.new {
@@ -418,7 +402,7 @@ begin
               end
               if not driver then
                 frame_queue << frame
-                driver = make_chrome(shardno, root, output_width, output_height)
+                driver = make_chrome(shardno, root, output_width, output_height, screenshot_bounds)
                 frame = queue_pop_nonblock(frame_queue)
                 if frame == nil
                   break
@@ -426,12 +410,12 @@ begin
               end
               seek_time = (frame.to_f / [1.0, (nframes.to_f - 1.0)].max) * (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) + screenshot_begin_time_as_render_time
               vlog(shardno, "frame #{frame} seeking to: #{seek_time}")
-              
+
               before = Time.now
               driver.execute_script("timelapse.seek(#{seek_time});")
-              # Wait at most 15 seconds until we assume things are drawn
-              
+
               while true do
+                # Wait at most 30 seconds until we assume things are drawn
                 if (Time.now - before) > 30
                   vlog(shardno, "giving up on frame #{frame} after #{((Time.now - before) * 1000).round}ms; stopping driver")
                   frame_queue << frame
@@ -452,7 +436,7 @@ begin
             end
           }
         }
-        
+
         nshards = (nframes / 5).floor
         if nshards < 1
           nshards = 1
@@ -460,7 +444,7 @@ begin
         if nshards > 4
           nshards = 4
         end
-                      
+
         shard_threads = []
 
         (0 ... nshards).each do |shardno|
@@ -471,9 +455,9 @@ begin
           end
           shard_threads << new_capture_frames_thread.call(shardno, thread_driver)
         end
-        
+
         shard_threads.each { |shard_thread| shard_thread.join }
-        
+
       rescue Selenium::WebDriver::Error::TimeOutError
         raise "Error taking screenshot. Data failed to load."
       end
