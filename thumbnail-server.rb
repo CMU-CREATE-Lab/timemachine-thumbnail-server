@@ -91,7 +91,7 @@ begin
   end
 
   def vlog(shardno, msg)
-    STDERR.write("#{Time.now.strftime('%Y-%m-%d %H:%M:%S')} THUMB #{Process.pid}:#{shardno} #{msg}\n")
+    STDERR.write("#{Time.now.strftime('%Y-%m-%d %H:%M:%S.%3N')} THUMB #{Process.pid}:#{shardno} #{msg}\n")
   end
 
   if cache_file and File.exists?(cache_file) and not recompute
@@ -134,16 +134,17 @@ begin
         # Note: Any ajax requests or large data files may not be loaded yet.
         #       We take care of that further down when taking the actual screenshots.
         driver.navigate.to url
-        vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
+        vlog(shardno, "make_chrome: #{driver.execute_script('{canvasLayer.setAnimate(false); return timelapse.frameno}')} frames before setAnimate(false)");
 
         # Just in case
         sleep(1)
 
         driver.execute_script("timelapse.setNewView(#{screenshot_bounds.to_json}, true);")
 
-        # Just in case
-        sleep(1)
+        ## Just in case
+        #sleep(1)
 
+        vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
         return driver
       end
 
@@ -378,6 +379,7 @@ begin
     if from_screenshot
       begin
         start_frame ||= 0
+        total_chrome_frames = 0
 
         tmpfile_screenshot_input_path = tmpfile_root_path + "/#{(Time.now.to_f*1000).to_i}"
         FileUtils.mkdir_p(tmpfile_screenshot_input_path) unless File.exists?(tmpfile_screenshot_input_path)
@@ -419,19 +421,25 @@ begin
                 if (Time.now - before) > 30
                   vlog(shardno, "giving up on frame #{frame} after #{((Time.now - before) * 1000).round}ms; stopping driver")
                   frame_queue << frame
+                  total_chrome_frames += driver.execute_script("return timelapse.frameno")
                   driver.quit
                   driver = nil
                   break
                 end
-                if driver.execute_script("return timelapse.lastFrameCompletelyDrawn;")
+                complete = driver.execute_script("{canvasLayer.update_(); return timelapse.lastFrameCompletelyDrawn && timelapse.frameno;}")
+                if complete
                   driver.save_screenshot("#{tmpfile_screenshot_input_path}/#{'%04d' % frame}.png")
-                  vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms");
+                  vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms (chrome frame #{complete})");
                   break
+                else
+                  vlog(shardno, "frame #{frame} called update but not ready yet");
+                  sleep(0.05);
                 end
               end
             end
             vlog(shardno, "Shard finished");
             if driver then
+              total_chrome_frames += driver.execute_script("return timelapse.frameno")
               driver.quit
             end
           }
@@ -441,8 +449,8 @@ begin
         if nshards < 1
           nshards = 1
         end
-        if nshards > 4
-          nshards = 4
+        if nshards > 8
+          nshards = 8
         end
 
         shard_threads = []
@@ -457,6 +465,8 @@ begin
         end
 
         shard_threads.each { |shard_thread| shard_thread.join }
+
+        vlog(0, "Chrome rendered a total of #{total_chrome_frames} frames, for #{nframes} frames needed (#{total_chrome_frames.to_f/nframes}x)")
 
       rescue Selenium::WebDriver::Error::TimeOutError
         raise "Error taking screenshot. Data failed to load."
