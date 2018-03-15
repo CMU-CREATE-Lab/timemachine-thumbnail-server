@@ -746,7 +746,9 @@ begin
 
     if cache_file
       File.rename tmpfile, cache_file
+      vlog(0, "Moved output file to cache: #{cache_file}")
     else
+      vlog(0, "Deleted output file");
       File.unlink tmpfile
     end
 
