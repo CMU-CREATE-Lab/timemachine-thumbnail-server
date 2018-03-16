@@ -430,7 +430,14 @@ begin
                   driver = nil
                   break
                 end
-                complete = driver.execute_script("{canvasLayer.update_(); return timelapse.lastFrameCompletelyDrawn && timelapse.frameno;}")
+                complete = driver.execute_script(
+                  "{" +
+                  "timelapse.setNewView(#{screenshot_bounds.to_json}, true);" +
+                  "timelapse.seek(#{seek_time});" +
+                  "canvasLayer.update_();" +
+                  "return timelapse.lastFrameCompletelyDrawn && timelapse.frameno;" +
+                  "}"
+                )
                 if complete
                   driver.save_screenshot("#{tmpfile_screenshot_input_path}/#{'%04d' % frame}.png")
                   vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms (chrome frame #{complete})");
