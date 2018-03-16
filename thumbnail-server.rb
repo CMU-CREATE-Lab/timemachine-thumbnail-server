@@ -187,8 +187,12 @@ begin
 
       driver = make_chrome(0, root, output_width, output_height, screenshot_bounds)
 
-      # 0 - 100
+      # 0 - 100.  If ps is missing or set to zero, override to 50
       screenshot_playback_speed = root_url_params.has_key?('ps') ? root_url_params['ps'][0].to_f : 50.0
+      if screenshot_playback_speed < 1e-10
+        screenshot_playback_speed = 50.0
+      end
+                                          
       # YYYYMMDD
       screenshot_begin_time_as_date = root_url_params.has_key?('bt') ? root_url_params['bt'][0] : 0.0
       # YYYYMMDD
