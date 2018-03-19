@@ -174,8 +174,8 @@ begin
         root += "minimalUI=true"
       elsif cgi.params.has_key?('timestampOnlyUI')
         root += "timestampOnlyUI=true"
-        #extra_css = "$('.captureTime.minimalUIMode').css('transform', 'translate(-50%,0)').css('left', '50%');"
-        extra_css = "$('.captureTime.minimalUIMode').css('left', '50%');"
+        extra_css = "$('.captureTime.minimalUIMode').css('transform', 'translate(-50%,0)').css('left', '50%');"
+        #extra_css = "$('.captureTime.minimalUIMode').css('left', '50%');"
       else
         root += "disableUI=true"
       end
