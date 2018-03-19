@@ -105,7 +105,7 @@ begin
 
     boundsNWSE = parse_bounds(cgi, 'boundsNWSE')
     boundsLTRB = parse_bounds(cgi, 'boundsLTRB')
-    if !boundsLTRB and !boundsLTRB
+    if !boundsNWSE and !boundsLTRB
       if from_screenshot
         boundsFromSharelink = true
       else
