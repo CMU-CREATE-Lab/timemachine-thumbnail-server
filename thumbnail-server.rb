@@ -105,10 +105,18 @@ begin
 
     boundsNWSE = parse_bounds(cgi, 'boundsNWSE')
     boundsLTRB = parse_bounds(cgi, 'boundsLTRB')
-
-    boundsNWSE and boundsLTRB and raise "Exactly one of boundsNWSE and boundsLTRB must be specified, but both were"
-    !boundsNWSE and !boundsLTRB and raise "Exactly one of boundsNWSE and boundsLTRB must be specified, but neither was"
-
+    if !boundsLTRB and !boundsLTRB
+      if from_screenshot
+        boundsFromSharelink = true
+      else
+        raise "Must specify boundsNWSE or boundsLTRB, unless fromScreenshot"
+      end
+    else
+      if boundsNWSE and boundsLTRB
+        raise "Both boundsNWSE and boundsLTRB were specified;  please specify only one"
+      end
+    end
+    
     if from_screenshot
       Selenium::WebDriver.logger.output = STDERR
       #Selenium::WebDriver.logger.level = :info
@@ -174,16 +182,28 @@ begin
       #
 
       screenshot_bounds = {}
-      screenshot_bounds['bbox'] = {}
-      if boundsNWSE
+      if boundsFromSharelink
+        view = root_url_params['v'][0].split(',')
+        if view[-1] == 'pts'
+          screenshot_bounds = {'bbox' => {'xmin' => view[0].to_f, 'ymin' => view[1].to_f}, 'xmax' => view[2].to_f, 'ymax' => view[3].to_f}
+        elsif view[-1] == 'latLng'
+          screenshot_bounds = {'center' => {'lat' => view[0].to_f, 'lng' => view[1].to_f}, 'zoom' => view[2].to_f}
+        else
+          vlog(0, 'boundsFromSharelink parsing failed')
+          raise 'boundsFromSharelink parsing failed'
+        end
+      elsif boundsNWSE
+        screenshot_bounds['bbox'] = {}
         screenshot_bounds['bbox']['ne'] = {'lat' => boundsNWSE[0], 'lng' => boundsNWSE[1]}
         screenshot_bounds['bbox']['sw'] = {'lat' => boundsNWSE[2], 'lng' => boundsNWSE[3]}
       else
+        screenshot_bounds['bbox'] = {}
         screenshot_bounds['bbox']['xmin'] = boundsLTRB[0]
         screenshot_bounds['bbox']['ymin'] = boundsLTRB[1]
         screenshot_bounds['bbox']['xmax'] = boundsLTRB[2]
         screenshot_bounds['bbox']['ymax'] = boundsLTRB[3]
       end
+      vlog(0, "screenshot_bounds #{screenshot_bounds}")
 
       driver = make_chrome(0, root, output_width, output_height, screenshot_bounds)
 
