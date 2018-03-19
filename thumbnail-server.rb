@@ -135,6 +135,7 @@ begin
         options.add_argument('--headless')
         options.add_argument('--hide-scrollbars')
         driver = Selenium::WebDriver.for :chrome, options: options
+        vlog(shardno, "make_chrome loading #{url}")
 
         # Resize the window to desired width/height.
         driver.manage.window.resize_to(output_width, output_height)
@@ -170,6 +171,8 @@ begin
 
       if cgi.params.has_key?('minimalUI')
         root += "minimalUI=true"
+      elsif cgi.params.has_key?('timestampOnlyUI')
+        root += "timestampOnlyUI=true"
       else
         root += "disableUI=true"
       end
