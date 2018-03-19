@@ -129,7 +129,9 @@ begin
         end
       end
 
-      def make_chrome(shardno, url, output_width, output_height, screenshot_bounds)
+      extra_css = "";
+
+      make_chrome = ->(shardno, url, output_width, output_height, screenshot_bounds) {
         before = Time.now
         options = Selenium::WebDriver::Chrome::Options.new
         options.add_argument('--headless')
@@ -148,14 +150,13 @@ begin
         # Just in case
         sleep(1)
 
-        driver.execute_script("timelapse.setNewView(#{screenshot_bounds.to_json}, true);")
-
+        driver.execute_script("timelapse.setNewView(#{screenshot_bounds.to_json}, true);" + extra_css)
         ## Just in case
         #sleep(1)
 
         vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
         return driver
-      end
+      }
 
       # Convert URL encoded characters back to their original values
       root.gsub!("023", "#")
@@ -173,6 +174,7 @@ begin
         root += "minimalUI=true"
       elsif cgi.params.has_key?('timestampOnlyUI')
         root += "timestampOnlyUI=true"
+        extra_css = "$('.captureTime.minimalUIMode').css('transform', 'translate(-50%,0)').css('left', '50%');"
       else
         root += "disableUI=true"
       end
@@ -208,7 +210,7 @@ begin
       end
       vlog(0, "screenshot_bounds #{screenshot_bounds}")
 
-      driver = make_chrome(0, root, output_width, output_height, screenshot_bounds)
+      driver = make_chrome.call(0, root, output_width, output_height, screenshot_bounds)
 
       # 0 - 100.  If ps is missing or set to zero, override to 50
       screenshot_playback_speed = root_url_params.has_key?('ps') ? root_url_params['ps'][0].to_f : 50.0
@@ -431,7 +433,7 @@ begin
               end
               if not driver then
                 frame_queue << frame
-                driver = make_chrome(shardno, root, output_width, output_height, screenshot_bounds)
+                driver = make_chrome.call(shardno, root, output_width, output_height, screenshot_bounds)
                 frame = queue_pop_nonblock(frame_queue)
                 if frame == nil
                   break
@@ -455,6 +457,7 @@ begin
                 end
                 complete = driver.execute_script(
                   "{" +
+                  extra_css +
                   "timelapse.setNewView(#{screenshot_bounds.to_json}, true);" +
                   "timelapse.seek(#{seek_time});" +
                   "canvasLayer.update_();" +
