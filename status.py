@@ -5,8 +5,8 @@ import json, os, subprocess
 print 'Content-Type: text/html'
 print ''
 
-#logfile_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/log.txt"
-logfile_path = '/t/thumbnails.cmucreatelab.org/log.txt'
+logfile_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/log.txt"
+#logfile_path = '/t/thumbnails.cmucreatelab.org/log.txt'
 cmd = "egrep ' (STARTTHUMBNAIL|ENDTHUMBNAIL) ' %s" % logfile_path
 
 thumbs = {}
