@@ -17,6 +17,8 @@
 
 # Cache design:
 #   Hash URL using
+
+
 require 'json'
 require 'cgi'
 require 'open-uri'
@@ -29,6 +31,7 @@ require 'selenium-webdriver'
 load File.dirname(File.realpath(__FILE__)) + '/mercator.rb'
 load File.dirname(File.realpath(__FILE__)) + '/point.rb'
 load File.dirname(File.realpath(__FILE__)) + '/bounds.rb'
+load File.dirname(File.realpath(__FILE__)) + '/FlockSemaphore.rb'
 
 cache_dir = File.dirname(File.realpath(__FILE__)) + '/cache'
 
@@ -52,6 +55,8 @@ def parse_bounds(cgi, key)
   bounds.size == 4 or raise "#{key} was specified without the required 4 coords separated by commas"
   bounds
 end
+
+
 
 begin
   debug << "<html><body>"
@@ -85,23 +90,65 @@ begin
     # Running in CGI mode;  enable cache
     cache_path = ENV['QUERY_STRING'].split("cachepath=")[1]
     cache_file = "#{cache_dir}#{cache_path}"
+    FileUtils.mkdir_p(File.dirname(cache_file))
   else
     # Running from commandline;  don't cache
     cache_file = nil
   end
 
+  $vlog_logfile = File.open(File.dirname(File.dirname(File.realpath(__FILE__))) + '/log.txt' , 'a')
+  $id = "%06d" % rand(1000000) 
+  $stats = {}
+  $begin_time = Time.now 
+  
   def vlog(shardno, msg)
-    STDERR.write("#{Time.now.strftime('%Y-%m-%d %H:%M:%S.%3N')} THUMB #{Process.pid}:#{shardno} #{msg}\n")
+    $vlog_logfile.write("#{Time.now.strftime('%Y-%m-%d %H:%M:%S.%3N')} THUMB #{Process.pid}:#{$id}:#{shardno} #{msg}\n")
+    $vlog_logfile.flush
   end
 
-  if cache_file and File.exists?(cache_file) and not recompute
-    vlog(0, "Found in cache.")
-    debug << "Found in cache."
-    image_data = open(cache_file, 'rb') {|i| i.read}
-  else
-    vlog(0, "Not found in cache; computing.")
+  # Loop
+  #   If thumbnail is in cache use it, done
+  #   Create and attempt to (non-blocking) acquire lock on <cachepath>.computing
+  #   Acquired? break from loop
 
-    from_screenshot = cgi.params.has_key?('fromScreenshot')
+  from_screenshot = cgi.params.has_key?('fromScreenshot')
+  image_data = nil
+  compute_path = cache_file + '.compute'
+  compute_file = nil
+
+  while true
+    if File.exists?(cache_file) and not recompute
+      vlog(0, "Found in cache.")
+      debug << "Found in cache."
+      image_data = open(cache_file, 'rb') {|i| i.read}
+      break
+    end
+
+    # If file isn't in cache and we've already locked the compute_file, exit loop and compute
+    if compute_file
+      break
+    end
+    
+    compute_file = File.open(compute_path, 'w')
+    if not compute_file.flock(File::LOCK_NB | File::LOCK_EX)
+      vlog(0, "Cannot get compute lock; waiting for another process to compute")
+      sleep(1)
+      compute_file.close
+      compute_file = nil
+    end
+  end
+
+  if image_data and compute_file
+    compute_file.close
+    compute_file = nil
+    FileUtils.rm_f(compute_path)
+  end
+
+  if not image_data
+    vlog(0, "Not found in cache; computing")
+    $request_url = ENV['REQUEST_SCHEME'] + '://' + ENV['HTTP_HOST'] + ENV['REQUEST_URI']
+    vlog(0, "STARTTHUMBNAIL #{$request_url}")
+
 
     boundsNWSE = parse_bounds(cgi, 'boundsNWSE')
     boundsLTRB = parse_bounds(cgi, 'boundsLTRB')
@@ -375,7 +422,6 @@ begin
     end
 
     tmpfile_root_path = File.dirname(tmpfile)
-    FileUtils.mkdir_p(tmpfile_root_path) unless File.exists?(tmpfile_root_path)
 
     is_image = true
     is_video = (format == 'mp4' or format == 'webm') ? true : false
@@ -504,7 +550,10 @@ begin
 
         shard_threads.each { |shard_thread| shard_thread.join }
 
-        vlog(0, "Chrome rendered a total of #{total_chrome_frames} frames, for #{nframes} frames needed (#{total_chrome_frames.to_f/nframes}x)")
+        vlog(0, "Chrome rendered a total of #{total_chrome_frames} frames, for #{nframes} frames needed (#{"%.1f" % (nframes * 100.0 / total_chrome_frames)}%)")
+        $stats['chromeRenderTimeSecs'] = Time.now - $begin_time
+        $stats['videoFrameCount'] = nframes
+        $stats['frameEfficiency'] = nframes.to_f * total_chrome_frames
 
       rescue Selenium::WebDriver::Error::TimeOutError
         raise "Error taking screenshot. Data failed to load."
@@ -780,7 +829,9 @@ begin
     end
 
     image_data = open(tmpfile, 'rb') {|i| i.read}
-    vlog(0, "Video finished, #{image_data.size} bytes")
+    $stats['sizeBytes'] = image_data.size
+    $stats['totalTimeSecs'] = Time.now - $begin_time
+    vlog(0, "ENDTHUMBNAIL #{$request_url} #{JSON.generate($stats)}")
 
     if cache_file
       File.rename tmpfile, cache_file
