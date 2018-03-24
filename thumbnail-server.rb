@@ -131,7 +131,7 @@ begin
     
     compute_file = File.open(compute_path, 'w')
     if not compute_file.flock(File::LOCK_NB | File::LOCK_EX)
-      vlog(0, "Cannot get compute lock; waiting for another process to compute")
+      vlog(0, "Cannot lock compute lockfile; waiting for another process to finish computing")
       sleep(1)
       compute_file.close
       compute_file = nil
@@ -165,6 +165,18 @@ begin
     end
     
     if from_screenshot
+      semaphore = FlockSemaphore.new('/t/thumbnails.cmucreatelab.org/locks')
+      while true
+        lock = semaphore.captureNonblock
+        if lock
+          vlog(0, "Captured resource lock #{lock}")
+          break
+        else
+          vlog(0, "Waiting to capture resource lock in /t/thumbnails.cmucreatelab.org/locks")
+        end
+        sleep(1)
+      end
+      
       Selenium::WebDriver.logger.output = STDERR
       #Selenium::WebDriver.logger.level = :info
 
@@ -553,8 +565,7 @@ begin
         vlog(0, "Chrome rendered a total of #{total_chrome_frames} frames, for #{nframes} frames needed (#{"%.1f" % (nframes * 100.0 / total_chrome_frames)}%)")
         $stats['chromeRenderTimeSecs'] = Time.now - $begin_time
         $stats['videoFrameCount'] = nframes
-        $stats['frameEfficiency'] = nframes.to_f * total_chrome_frames
-
+        $stats['frameEfficiency'] = nframes.to_f / total_chrome_frames
       rescue Selenium::WebDriver::Error::TimeOutError
         raise "Error taking screenshot. Data failed to load."
       end
