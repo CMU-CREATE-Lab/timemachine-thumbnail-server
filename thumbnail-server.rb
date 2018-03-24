@@ -545,9 +545,11 @@ begin
         if nshards < 1
           nshards = 1
         end
-        if nshards > 8
-          nshards = 8
+        if nshards > 6
+          nshards = 6
         end
+
+        $stats['nshards'] = nshards
 
         shard_threads = []
 
@@ -842,6 +844,8 @@ begin
     image_data = open(tmpfile, 'rb') {|i| i.read}
     $stats['sizeBytes'] = image_data.size
     $stats['totalTimeSecs'] = Time.now - $begin_time
+    pt = Process.times
+    $stats['cpuTime'] = pt.utime + pt.stime + pt.cutime + pt.cstime
     vlog(0, "ENDTHUMBNAIL #{$request_url} #{JSON.generate($stats)}")
 
     if cache_file
