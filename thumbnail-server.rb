@@ -99,6 +99,13 @@ begin
   $vlog_logfile = File.open(File.dirname(File.dirname(File.realpath(__FILE__))) + '/log.txt' , 'a')
   $id = "%06d" % rand(1000000) 
   $stats = {}
+
+  ['REMOTE_ADDR', 'HTTP_USER_AGENT', 'HTTP_REFERER'].each {|cgi_param|
+    if ENV[cgi_param]
+      $stats[cgi_param] = ENV[cgi_param]
+    end
+  }
+  
   $begin_time = Time.now 
   
   def vlog(shardno, msg)
@@ -148,6 +155,7 @@ begin
     vlog(0, "Not found in cache; computing")
     $request_url = ENV['REQUEST_SCHEME'] + '://' + ENV['HTTP_HOST'] + ENV['REQUEST_URI']
     vlog(0, "STARTTHUMBNAIL #{$request_url}")
+    vlog(0, "CHECKPOINTTHUMBNAIL START #{JSON.generate($stats)}")
 
 
     boundsNWSE = parse_bounds(cgi, 'boundsNWSE')
@@ -271,6 +279,7 @@ begin
       vlog(0, "screenshot_bounds #{screenshot_bounds}")
 
       driver = make_chrome.call(0, root, output_width, output_height, screenshot_bounds)
+      vlog(0, "CHECKPOINTTHUMBNAIL CHROMERUNNING #{JSON.generate($stats)}")
 
       # 0 - 100.  If ps is missing or set to zero, override to 50
       screenshot_playback_speed = root_url_params.has_key?('ps') ? root_url_params['ps'][0].to_f : 50.0
@@ -568,6 +577,7 @@ begin
         $stats['chromeRenderTimeSecs'] = Time.now - $begin_time
         $stats['videoFrameCount'] = nframes
         $stats['frameEfficiency'] = nframes.to_f / total_chrome_frames
+        vlog(0, "CHECKPOINTTHUMBNAIL CHROMEFINISHED #{JSON.generate($stats)}")
       rescue Selenium::WebDriver::Error::TimeOutError
         raise "Error taking screenshot. Data failed to load."
       end
@@ -742,7 +752,7 @@ begin
     if is_image && nframes != 1 && !collapse
       raise "nframes must be omitted or set to 1 when outputting an image"
     end
-
+    
     #
     # Insert filter, if any
     #
@@ -890,6 +900,8 @@ begin
 rescue SystemExit
   # ignore
 rescue Exception => e
+  $stats['FATALERROR'] = "#{e}\n#{e.backtrace.join("\n")}"
+  vlog(0, "CHECKPOINTTHUMBNAIL FATALERROR #{JSON.generate($stats)}")
   debug.insert 0, "400: Bad Request<br>"
   debug.insert 2, "<pre>#{e}\n#{e.backtrace.join("\n")}</pre>"
   debug.insert 3, "<hr>"
