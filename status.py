@@ -35,7 +35,10 @@ for line in lines:
     if line.strip() == "":
         continue
     tokens = line.split(None, 6)
-    id = tokens[3]
+    try:
+        id = tokens[3]
+    except:
+        continue
     if not id in thumbs:
         thumbs[id] = {}
     thumbs[id][tokens[4]] = line
