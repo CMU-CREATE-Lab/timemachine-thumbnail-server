@@ -234,8 +234,8 @@ begin
       root += root.include?("#") ? "&" : "#"
 
       screenshot_from_video = root.include?("blsat")
-
-      root_url_params = CGI::parse(root)
+      root_url_params = CGI::parse(root.split('#')[1])
+      vlog(0, "root_url_params #{root_url_params}")
 
       if cgi.params.has_key?('minimalUI')
         root += "minimalUI=true"
@@ -245,6 +245,10 @@ begin
         #extra_css = "$('.captureTime.minimalUIMode').css('left', '50%');"
       else
         root += "disableUI=true"
+      end
+
+      if cgi.params.has_key?('baseMapsNoLabels')
+        root += 'baseMapsNoLabels=true'
       end
 
       output_width = cgi.params['width'][0].to_i || 128
