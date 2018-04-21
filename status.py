@@ -19,7 +19,20 @@ logfile_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/l
 
 thumbs = {}
 
-lines = open(logfile_path, encoding='utf-8').readlines()
+log = open(logfile_path, encoding='utf-8')
+log.seek(0, os.SEEK_END)
+size = log.tell()
+max_size = 100000000
+if size > max_size:
+    pos = size - max_size
+    log.seek(pos)
+    print('Logfile %.1f MB, skipping to pos %.1f MB<br>' % (size / 1e6, pos / 1e6))
+    # Skip the first line since it might be partial
+    lines = log.readlines()[1:]
+else:
+    log.seek(0)
+    lines = log.readlines()
+
 ids = []
 
 if os.environ['QUERY_STRING']:
