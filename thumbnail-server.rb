@@ -489,7 +489,17 @@ begin
         video_duration_in_secs = (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) /  (viewer_max_playback_rate / screenshot_playback_rate)
         nframes = is_image ? 1 : (video_duration_in_secs * desired_fps).ceil
 
+        if nframes < 0
+          nframes = 1
+        end
+
         vlog(0, "Need to compute #{nframes} frames")
+
+        if nframes > 2000
+          vlog(0, "Too many frames to compute #{nframes}")
+          raise "Too many frames to compute #{nframes}"
+        end
+          
         frame_queue = Queue.new
         (0 ... nframes).each { |i| frame_queue << i }
 
@@ -578,6 +588,7 @@ begin
         shard_threads.each { |shard_thread| shard_thread.join }
 
         vlog(0, "Chrome rendered a total of #{total_chrome_frames} frames, for #{nframes} frames needed (#{"%.1f" % (nframes * 100.0 / total_chrome_frames)}%)")
+
         $stats['chromeRenderTimeSecs'] = Time.now - $begin_time
         $stats['videoFrameCount'] = nframes
         $stats['frameEfficiency'] = nframes.to_f / total_chrome_frames
@@ -585,6 +596,7 @@ begin
       rescue Selenium::WebDriver::Error::TimeOutError
         raise "Error taking screenshot. Data failed to load."
       end
+      semaphore.release
     else
       #
       # Search for tile from the tile tree

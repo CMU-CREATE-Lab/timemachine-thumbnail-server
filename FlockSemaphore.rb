@@ -19,5 +19,11 @@ class FlockSemaphore
     }
     return false
   end
+
+  def release
+    if @lockedFile
+      @lockedFile.close()
+      @lockedFile = nil
+    end
+  end
 end
-  
