@@ -34,6 +34,7 @@ load File.dirname(File.realpath(__FILE__)) + '/bounds.rb'
 load File.dirname(File.realpath(__FILE__)) + '/FlockSemaphore.rb'
 
 cache_dir = File.dirname(File.realpath(__FILE__)) + '/cache'
+tmp_dir = File.dirname(File.realpath(__FILE__)) + '/tmp'
 
 filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 
@@ -440,11 +441,7 @@ begin
       time += leader_seconds
     end
 
-    if cache_file
-      tmpfile = "#{cache_file}.tmp-#{Process.pid}.#{format}"
-    else
-      tmpfile = "/tmp/thumbnail-server-#{Process.pid}.#{format}"
-    end
+    tmpfile = "#{tmp_dir}/#{Process.pid}.#{(Time.now.to_f)}.#{format}"
 
     tmpfile_root_path = File.dirname(tmpfile)
 
@@ -482,7 +479,7 @@ begin
         start_frame ||= 0
         total_chrome_frames = 0
 
-        tmpfile_screenshot_input_path = tmpfile_root_path + "/#{(Time.now.to_f*1000).to_i}"
+        tmpfile_screenshot_input_path = "#{tmp_dir}/screenshots.#{Process.pid}.#{(Time.now.to_f)}"
         FileUtils.mkdir_p(tmpfile_screenshot_input_path) unless File.exists?(tmpfile_screenshot_input_path)
 
         screenshot_playback_rate = (100.0 / screenshot_playback_speed)
@@ -854,7 +851,7 @@ begin
 
     post_process_filters.chomp!(',')
     unless post_process_filters.empty?
-      tmpfile_postprocess = "#{cache_file}.tmp-#{Process.pid}-pp.#{format}"
+      tmpfile_postprocess = "#{tmp_dir}/#{Process.pid}.#{(Time.now.to_f)}-pp.#{format}"
       cmd = "#{ffmpeg_path} -y -i #{tmpfile} -filter_complex \"#{post_process_filters}\" -threads #{num_threads} \"#{tmpfile_postprocess}\""
       debug << "Running post process filters: '#{cmd}'<br>"
       output = `#{cmd} 2>&1`;
