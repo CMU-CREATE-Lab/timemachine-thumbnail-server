@@ -700,7 +700,7 @@ begin
         frame_labels = txt.split("|")
       end
 
-      label += ",\""
+      label += ","
       label += "drawtext=fontfile=./DroidSans.ttf:fontsize=#{label_size}:fontcolor=#{label_color}:x=#{label_x_pos}:y=#{label_y_pos}"
 
       # If we do not have enough labels to cover every frame, ensure that the last label is blank to prevent ffmpeg from
@@ -727,8 +727,6 @@ begin
       # number of characters that Windows allows via the commandline, but more generally, because this list can get very long
       # no matter the OS and escaping special chars/spaces in both ffmpeg and ruby-land is also a bit of a nightmare.
       File.open(frame_label_cmd_file, 'w') { |file| file.write(label_cmds) } if frame_labels.length > 1
-
-      label += "\""
     end
 
     start_dwell_in_sec = cgi.params['startDwell'][0].to_f
