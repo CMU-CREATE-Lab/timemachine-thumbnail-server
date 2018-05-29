@@ -1,27 +1,27 @@
 Time Machine Thumbnail Service API
 ==================================
 
-The thumbnail service renders arbitrary image/video/gif thumbnails from Time Machines accessible over HTTP/HTTPS.  While the thumbnail service lives on timemachine-api.cmucreatelab.org, it can render thumbnails for Time Machines served anywhere over HTTP or HTTPS.
+The thumbnail service renders arbitrary image/video/gif thumbnails from Time Machines accessible over HTTP/HTTPS.  While the thumbnail service lives on thumbnails.cmucreatelab.org, it can render thumbnails for Time Machines served anywhere over HTTP or HTTPS.
 
 Examples
 --------
 
 JPEG thumbnail from Earth Timelapse, from the Brazilian State of Rondonia in 2012:
 
-<img src="http://timemachine-api.cmucreatelab.org/thumbnail?root=http://earthengine.google.org/timelapse/data/20130507&boundsNWSE=-8.02999,-65.51147,-13.56390,-59.90845&width=200&frameTime=2.8">
+<img src="http://thumbnails.cmucreatelab.org/thumbnail?root=http://earthengine.google.org/timelapse/data/20130507&boundsNWSE=-8.02999,-65.51147,-13.56390,-59.90845&width=200&frameTime=2.8">
 
-`http://timemachine-api.cmucreatelab.org/thumbnail?root=http://earthengine.google.org/timelapse/data/20130507&boundsNWSE=-8.02999,-65.51147,-13.56390,-59.90845&width=200&frameTime=2.8`
+`http://thumbnails.cmucreatelab.org/thumbnail?root=http://earthengine.google.org/timelapse/data/20130507&boundsNWSE=-8.02999,-65.51147,-13.56390,-59.90845&width=200&frameTime=2.8`
 
 GIF thumbnail from a Shenango Coke Works smoke emission in 2014:
 
-<img src="http://timemachine-api.cmucreatelab.org/thumbnail?root=http://explorables.cmucreatelab.org/environmental-timemachines/shenango-20141005-20141006-tm/&boundsLTRB=2084.88990915391,1273.0414920286516,3791.489909153904,2519.6414920286475&width=320&height=240&frameTime=877.8333333333334&nframes=10&format=gif&tileFormat=mp4&labels=2014-10-06%2009:31:20">
+<img src="http://thumbnails.cmucreatelab.org/thumbnail?root=http://explorables.cmucreatelab.org/environmental-timemachines/shenango-20141005-20141006-tm/&boundsLTRB=2084.88990915391,1273.0414920286516,3791.489909153904,2519.6414920286475&width=320&height=240&frameTime=877.8333333333334&nframes=10&format=gif&tileFormat=mp4&labels=2014-10-06%2009:31:20">
 
-`http://timemachine-api.cmucreatelab.org/thumbnail?root=http://explorables.cmucreatelab.org/environmental-timemachines/shenango-20141005-20141006-tm/&boundsLTRB=2084.88990915391,1273.0414920286516,3791.489909153904,2519.6414920286475&width=320&height=240&frameTime=877.8333333333334&nframes=10&format=gif&tileFormat=mp4&labels=2014-10-06%2009:30:31`
+`http://thumbnails.cmucreatelab.org/thumbnail?root=http://explorables.cmucreatelab.org/environmental-timemachines/shenango-20141005-20141006-tm/&boundsLTRB=2084.88990915391,1273.0414920286516,3791.489909153904,2519.6414920286475&width=320&height=240&frameTime=877.8333333333334&nframes=10&format=gif&tileFormat=mp4&labels=2014-10-06%2009:30:31`
 
 API
 ---
 
-`http://timemachine-api.cmucreatelab.org/thumbnail?`_[flags]_
+`http://thumbnails.cmucreatelab.org/thumbnail?`_[flags]_
 
 `root=`_rootUrl_
 
