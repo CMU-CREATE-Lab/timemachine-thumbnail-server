@@ -14,7 +14,7 @@ JPEG thumbnail from Earth Timelapse, from the Brazilian State of Rondonia in 201
 
 GIF thumbnail from a Shenango Coke Works smoke emission in 2014:
 
-<img src="http://thumbnails.cmucreatelab.org/thumbnail?root=http://explorables.cmucreatelab.org/environmental-timemachines/shenango-20141005-20141006-tm/&boundsLTRB=2084.88990915391,1273.0414920286516,3791.489909153904,2519.6414920286475&width=320&height=240&frameTime=877.8333333333334&nframes=10&format=gif&tileFormat=mp4&labels=2014-10-06%2009:31:20">
+<img src="http://thumbnails.cmucreatelab.org/thumbnail?root=http://tiles.cmucreatelab.org/ecam/timemachines/shenango1/2014-11-20.timemachine/&boundsLTRB=2084.88990915391,1273.0414920286516,3791.489909153904,2519.6414920286475&width=320&height=240&frameTime=877.8333333333334&nframes=10&format=gif&tileFormat=mp4&labels=2014-10-06%2009:31:20">
 
 `http://thumbnails.cmucreatelab.org/thumbnail?root=http://tiles.cmucreatelab.org/ecam/timemachines/shenango1/2014-11-20.timemachine/&boundsLTRB=2084.88990915391,1273.0414920286516,3791.489909153904,2519.6414920286475&width=320&height=240&frameTime=877.8333333333334&nframes=10&format=gif&tileFormat=mp4&labels=2014-10-06%2009:30:31`
 
