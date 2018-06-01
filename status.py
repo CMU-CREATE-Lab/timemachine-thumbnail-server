@@ -70,6 +70,8 @@ for id in reversed(ids[-num_thumbnails:]):
     tokens = line.split(None, 6)
     url = tokens[5]
     queryparams =  urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    if not 'format' in queryparams:
+        continue
     print('<h3>%s %sx%s %s %s</h3>' % (queryparams['format'][0], queryparams['width'][0], queryparams['height'][0], tokens[0], tokens[1].split('.')[0]))
     stats = {}
 
