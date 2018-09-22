@@ -61,6 +61,7 @@ site_names = {
     'trimont1': 'Downtown',
     'walnuttowers1': 'Mon Valley',
     'oakland':'Oakland',
+    'westmifflin1': 'Edgar Thomson South'
     }
 
 results = []
@@ -68,8 +69,9 @@ results = []
 for id in reversed(ids):
     line = thumbs[id]['STARTTHUMBNAIL']
     tokens = line.split(None, 6)
+    created_at = tokens[0] + ' ' + tokens[1]
     url = tokens[5]
-    queryparams =  urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    queryparams =  urllib.parse.parse_qs(urllib.parse.urlparse(url).query, keep_blank_values=True)
     if not 'format' in queryparams:
         continue
     if 'recompute' in queryparams:
@@ -103,6 +105,7 @@ for id in reversed(ids):
         'format':format,
         'startFrame':int(queryparams['startFrame'][0]),
         'nframes':int(queryparams['nframes'][0]),
+        'created':created_at
     })
 
 results.sort(key=lambda r: '%s_%08d' % (r['date'], r['startFrame']))
