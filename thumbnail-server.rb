@@ -216,7 +216,7 @@ begin
         vlog(shardno, "make_chrome: #{driver.execute_script('{canvasLayer.setAnimate(false); return timelapse.frameno}')} frames before setAnimate(false)");
 
         # Just in case
-        sleep(1)
+        sleep(2)
 
         driver.execute_script("timelapse.setNewView(#{screenshot_bounds.to_json}, true);" + extra_css)
         ## Just in case
@@ -227,14 +227,22 @@ begin
       }
 
       # Convert URL encoded characters back to their original values
-      root.gsub!("023", "#")
-      root.gsub!("026", "&")
       root.gsub!("03D", "=")
       root.gsub!("02C", ",")
+      # Mistakes were made when hex values were chosen for # and &
+      # We have to do extra work do convert them back and ensure that we
+      # do not accidently convert real sequences of these digits
+      root.scan(/026\w+=/).each do |m|
+        root.gsub!(m, m.gsub("026", "&"))
+      end
+      root.scan(/023\w+=/).each do |m|
+        root.gsub!(m, m.gsub("026", "#"))
+      end
 
       root += root.include?("#") ? "&" : "#"
 
       screenshot_from_video = root.include?("blsat")
+      vlog(0, "root #{root}")
       root_url_params = CGI::parse(root.split('#')[1])
       vlog(0, "root_url_params #{root_url_params}")
 
@@ -519,6 +527,7 @@ begin
                 end
               end
               seek_time = (frame.to_f / [1.0, (nframes.to_f - 1.0)].max) * (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) + screenshot_begin_time_as_render_time
+              debug << "frame #{frame} seeking to: #{seek_time}<br>"
               vlog(shardno, "frame #{frame} seeking to: #{seek_time}")
 
               before = Time.now
