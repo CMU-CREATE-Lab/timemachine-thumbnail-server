@@ -57,8 +57,6 @@ def parse_bounds(cgi, key)
   bounds
 end
 
-
-
 begin
   debug << "<html><body>"
   debug << "<pre>"
@@ -210,6 +208,10 @@ begin
         sleep(1)
       end
       
+
+      thumbnail_worker_hostname = File.basename(lock).split('.')[2..-1].join('.')
+      vlog(0, "Thumbnail worker #{thumbnail_worker_hostname}")
+
       Selenium::WebDriver.logger.output = STDERR
       #Selenium::WebDriver.logger.level = :info
 
