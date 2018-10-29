@@ -174,6 +174,22 @@ begin
     end
     
     if from_screenshot
+      if root.include?('allegheny_school')
+        vlog(0, "Aborting due to 'allegheny_school'")
+        exit
+      end
+      if root.include?(',pgh_')
+        vlog(0, "Aborting due to ',pgh_'")
+        exit
+      end
+      if root.include?('ac_superzips_score')
+        vlog(0, "Aborting due to 'ac_superzips_score'")
+        exit
+      end
+      if root.include?(',allegheny_county')
+        vlog(0, "Aborting due to ',allegheny_county'")
+        exit
+      end
       semaphore = FlockSemaphore.new('/t/thumbnails.cmucreatelab.org/locks')
       while true
         lock = semaphore.captureNonblock
