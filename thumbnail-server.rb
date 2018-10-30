@@ -26,6 +26,7 @@ require 'digest'
 require 'fileutils'
 require 'bigdecimal'
 require 'bigdecimal/util'
+require 'net/http'
 require 'selenium-webdriver'
 
 load File.dirname(File.realpath(__FILE__)) + '/mercator.rb'
@@ -33,20 +34,25 @@ load File.dirname(File.realpath(__FILE__)) + '/point.rb'
 load File.dirname(File.realpath(__FILE__)) + '/bounds.rb'
 load File.dirname(File.realpath(__FILE__)) + '/FlockSemaphore.rb'
 
-cache_dir = File.dirname(File.realpath(__FILE__)) + '/cache'
-tmp_dir = File.dirname(File.realpath(__FILE__)) + '/tmp'
-
 filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 
-ffmpeg_path = '/usr/local/bin/ffmpeg'
-num_threads = 8
-from_screenshot = false
+$ffmpeg_path = '/usr/local/bin/ffmpeg'
+$num_threads = 8
+
+$vlog_logfile = File.open(File.dirname(File.dirname(File.realpath(__FILE__))) + '/log.txt' , 'a')
+$id = "%06d" % rand(1000000) 
+$stats = {}
+
+def vlog(shardno, msg)
+  $vlog_logfile.write("#{Time.now.strftime('%Y-%m-%d %H:%M:%S.%3N')} THUMB #{Process.pid}:#{$id}:#{shardno} #{msg}\n")
+  $vlog_logfile.flush
+end
 
 cgi = CGI.new
 cgi.params = CGI::parse(ENV.to_hash['REQUEST_URI'])
 cgi.params['root'] = cgi.params.delete('/thumbnail?root')
 
-debug = []
+$debug = []
 
 def parse_bounds(cgi, key)
   if not cgi.params.has_key?(key)
@@ -57,680 +63,488 @@ def parse_bounds(cgi, key)
   bounds
 end
 
-begin
-  debug << "<html><body>"
-  debug << "<pre>"
-  debug << JSON.pretty_generate(ENV.to_hash)
-  debug << "</pre><hr><pre>"
-  debug << JSON.pretty_generate(cgi.params)
-  debug << "</pre>"
-  debug << "<hr>"
 
-  if cgi.params.has_key? 'test'
-    test_html = File.open(File.dirname(File.realpath(__FILE__)) + '/test.html').read
-    cgi.out('Access-Control-Allow-Origin' => '*') {test_html}
-    exit
+
+class ThumbnailGenerator
+  def initialize()
+    @cache_dir = File.dirname(File.realpath(__FILE__)) + '/cache'
+    @tmp_dir = File.dirname(File.realpath(__FILE__)) + '/tmp'
   end
 
-  root = cgi.params['root'][0] or raise "Missing 'root' param"
-  root = root.sub(/\/$/, '')
-  debug << "root: #{root}<br>"
-
-  format = cgi.params['format'][0] || 'jpg'
-
-  tile_format = cgi.params['tileFormat'][0] || 'webm'
-
-  nframes = cgi.params['nframes'][0] || 1
-  nframes = nframes.to_i
-
-  recompute = cgi.params.has_key? 'recompute'
-
-  if ENV['QUERY_STRING']
-    # Running in CGI mode;  enable cache
-    cache_path = ENV['QUERY_STRING'].split("cachepath=")[1]
-    cache_file = "#{cache_dir}#{cache_path}"
-    FileUtils.mkdir_p(File.dirname(cache_file))
-  else
-    # Running from commandline;  don't cache
-    cache_file = nil
-  end
-
-  $vlog_logfile = File.open(File.dirname(File.dirname(File.realpath(__FILE__))) + '/log.txt' , 'a')
-  $id = "%06d" % rand(1000000) 
-  $stats = {}
-
-  ['REMOTE_ADDR', 'HTTP_USER_AGENT', 'HTTP_REFERER'].each {|cgi_param|
-    if ENV[cgi_param]
-      $stats[cgi_param] = ENV[cgi_param]
-    end
-  }
-  
-  $begin_time = Time.now 
-  
-  def vlog(shardno, msg)
-    $vlog_logfile.write("#{Time.now.strftime('%Y-%m-%d %H:%M:%S.%3N')} THUMB #{Process.pid}:#{$id}:#{shardno} #{msg}\n")
-    $vlog_logfile.flush
-  end
-
-  # Loop
-  #   If thumbnail is in cache use it, done
-  #   Create and attempt to (non-blocking) acquire lock on <cachepath>.computing
-  #   Acquired? break from loop
-
-  from_screenshot = cgi.params.has_key?('fromScreenshot')
-  image_data = nil
-  compute_path = cache_file + '.compute'
-  compute_file = nil
-
-  while true
-    if File.exists?(cache_file) and not recompute
-      vlog(0, "Found in cache.")
-      debug << "Found in cache."
-      image_data = open(cache_file, 'rb') {|i| i.read}
-      break
-    end
-
-    # If file isn't in cache and we've already locked the compute_file, exit loop and compute
-    if compute_file
-      break
-    end
+  def make_chrome(shardno, url)
+    before = Time.now
+    options = Selenium::WebDriver::Chrome::Options.new
+    options.add_argument('--headless')
+    options.add_argument('--hide-scrollbars')
+    driver = Selenium::WebDriver.for :chrome, options: options
+    vlog(shardno, "make_chrome loading #{url}")
     
-    compute_file = File.open(compute_path, 'w')
-    if not compute_file.flock(File::LOCK_NB | File::LOCK_EX)
-      vlog(0, "Cannot lock compute lockfile; waiting for another process to finish computing")
-      sleep(1)
-      compute_file.close
-      compute_file = nil
+    # Resize the window to desired width/height.
+    driver.manage.window.resize_to(@output_width, @output_height)
+  
+    # Navigate to the page; will block until the load is complete.
+    # Note: Any ajax requests or large data files may not be loaded yet.
+    #       We take care of that further down when taking the actual screenshots.
+    driver.navigate.to url
+    vlog(shardno, "make_chrome: #{driver.execute_script('{canvasLayer.setAnimate(false); return timelapse.frameno}')} frames before setAnimate(false)");
+    
+    # Just in case
+    sleep(2)
+    
+    driver.execute_script("timelapse.setNewView(#{@screenshot_bounds.to_json}, true);" + @extra_css)
+    ## Just in case
+    #sleep(1)
+    
+    vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
+    return driver
+  end
+
+  def acquire_screenshot_semaphore()
+    if root.include?('voting_ac_us_house_boundaries_2018_chor')
+      vlog(0, "Aborting due to 'voting_ac_us_house_boundaries_2018_chor'")
+      exit
     end
-  end
-
-  if image_data and compute_file
-    compute_file.close
-    compute_file = nil
-    FileUtils.rm_f(compute_path)
-  end
-
-  if not image_data
-    vlog(0, "Not found in cache; computing")
-    $request_url = ENV['REQUEST_SCHEME'] + '://' + ENV['HTTP_HOST'] + ENV['REQUEST_URI']
-    vlog(0, "STARTTHUMBNAIL #{$request_url}")
-    vlog(0, "CHECKPOINTTHUMBNAIL START #{JSON.generate($stats)}")
-
-
-    boundsNWSE = parse_bounds(cgi, 'boundsNWSE')
-    boundsLTRB = parse_bounds(cgi, 'boundsLTRB')
-    if !boundsNWSE and !boundsLTRB
-      if from_screenshot
-        boundsFromSharelink = true
+    if root.include?('voting_ac_polling_places')
+      vlog(0, "Aborting due to 'voting_ac_polling_places'")
+      exit
+    end
+    if @root.include?('allegheny_school')
+      vlog(0, "Aborting due to 'allegheny_school'")
+      exit
+    end
+    if @root.include?(',pgh_')
+      vlog(0, "Aborting due to ',pgh_'")
+      exit
+    end
+    if @root.include?('ac_superzips_score')
+      vlog(0, "Aborting due to 'ac_superzips_score'")
+      exit
+    end
+    if @root.include?(',allegheny_county')
+      vlog(0, "Aborting due to ',allegheny_county'")
+      exit
+    end
+    @semaphore = FlockSemaphore.new('/t/thumbnails.cmucreatelab.org/locks')
+    while true
+      lock = @semaphore.captureNonblock
+      if lock
+        vlog(0, "Captured resource lock #{lock}")
+        break
       else
-        raise "Must specify boundsNWSE or boundsLTRB, unless fromScreenshot"
+        vlog(0, "Waiting to capture resource lock in /t/thumbnails.cmucreatelab.org/locks")
       end
-    else
-      if boundsNWSE and boundsLTRB
-        raise "Both boundsNWSE and boundsLTRB were specified;  please specify only one"
+      sleep(1)
+    end
+    thumbnail_worker_hostname = File.basename(lock).split('.')[2..-1].join('.')
+    vlog(0, "Thumbnail worker #{thumbnail_worker_hostname}")
+    return thumbnail_worker_hostname
+  end
+
+
+  def start_thumbnail_from_screenshot()
+    
+    Selenium::WebDriver.logger.output = STDERR
+    #Selenium::WebDriver.logger.level = :info
+    
+    def queue_pop_nonblock(queue)
+      begin
+        return queue.pop(non_block=true)
+      rescue ThreadError
+        return nil
       end
     end
     
-    if from_screenshot
-      if root.include?('voting_ac_us_house_boundaries_2018_chor')
-        vlog(0, "Aborting due to 'voting_ac_us_house_boundaries_2018_chor'")
-        exit
+    @extra_css = "";
+    
+    # Convert URL encoded characters back to their original values
+    @root.gsub!("03D", "=")
+    @root.gsub!("02C", ",")
+    # Mistakes were made when hex values were chosen for # and &
+    # We have to do extra work do convert them back and ensure that we
+    # do not accidently convert real sequences of these digits
+    @root.scan(/026\w+=/).each do |m|
+      @root.gsub!(m, m.gsub("026", "&"))
+    end
+    @root.scan(/023\w+=/).each do |m|
+      @root.gsub!(m, m.gsub("026", "#"))
+    end
+    
+    @root += @root.include?("#") ? "&" : "#"
+    
+    screenshot_from_video = @root.include?("blsat")
+    vlog(0, "root #{@root}")
+    root_url_params = CGI::parse(@root.split('#')[1])
+    vlog(0, "root_url_params #{root_url_params}")
+    
+    if @cgi.params.has_key?('minimalUI')
+      @root += "minimalUI=true"
+    elsif @cgi.params.has_key?('timestampOnlyUI')
+      @root += "timestampOnlyUI=true"
+      @extra_css = "$('.captureTime.minimalUIMode').css('transform', 'translate(-50%,0)').css('left', '50%');"
+    #extra_css = "$('.captureTime.minimalUIMode').css('left', '50%');"
+    else
+      @root += "disableUI=true"
+    end
+    
+    if @cgi.params.has_key?('baseMapsNoLabels')
+      @root += 'baseMapsNoLabels=true'
+    end
+  
+    @output_width = @cgi.params['width'][0].to_i || 128
+    @output_height = @cgi.params['height'][0].to_i || 74
+    
+    #
+    # Parse bounds
+    #
+    
+    @screenshot_bounds = {}
+    if @boundsFromSharelink
+      view = root_url_params['v'][0].split(',')
+      if view[-1] == 'pts'
+        @screenshot_bounds = {'bbox' => {'xmin' => view[0].to_f, 'ymin' => view[1].to_f}, 'xmax' => view[2].to_f, 'ymax' => view[3].to_f}
+      elsif view[-1] == 'latLng'
+        @screenshot_bounds = {'center' => {'lat' => view[0].to_f, 'lng' => view[1].to_f}, 'zoom' => view[2].to_f}
+      else
+        vlog(0, 'boundsFromSharelink parsing failed')
+        raise 'boundsFromSharelink parsing failed'
       end
-      if root.include?('voting_ac_polling_places')
-        vlog(0, "Aborting due to 'voting_ac_polling_places'")
-        exit
-      end
-      if root.include?('allegheny_school')
-        vlog(0, "Aborting due to 'allegheny_school'")
-        exit
-      end
-      if root.include?(',pgh_')
-        vlog(0, "Aborting due to ',pgh_'")
-        exit
-      end
-      if root.include?('ac_superzips_score')
-        vlog(0, "Aborting due to 'ac_superzips_score'")
-        exit
-      end
-      if root.include?(',allegheny_county')
-        vlog(0, "Aborting due to ',allegheny_county'")
-        exit
-      end
-      semaphore = FlockSemaphore.new('/t/thumbnails.cmucreatelab.org/locks')
-      while true
-        lock = semaphore.captureNonblock
-        if lock
-          vlog(0, "Captured resource lock #{lock}")
-          break
-        else
-          vlog(0, "Waiting to capture resource lock in /t/thumbnails.cmucreatelab.org/locks")
-        end
-        sleep(1)
+    elsif @boundsNWSE
+      @screenshot_bounds['bbox'] = {}
+      @screenshot_bounds['bbox']['ne'] = {'lat' => @boundsNWSE[0], 'lng' => @boundsNWSE[1]}
+      @screenshot_bounds['bbox']['sw'] = {'lat' => @boundsNWSE[2], 'lng' => @boundsNWSE[3]}
+    else
+      @screenshot_bounds['bbox'] = {}
+      @screenshot_bounds['bbox']['xmin'] = @boundsLTRB[0]
+      @screenshot_bounds['bbox']['ymin'] = @boundsLTRB[1]
+      @screenshot_bounds['bbox']['xmax'] = @boundsLTRB[2]
+      @screenshot_bounds['bbox']['ymax'] = @boundsLTRB[3]
+    end
+    vlog(0, "screenshot_bounds #{@screenshot_bounds}")
+    
+    driver = make_chrome(0, @root)
+    @first_driver = driver
+    vlog(0, "CHECKPOINTTHUMBNAIL CHROMERUNNING #{JSON.generate($stats)}")
+    
+    # 0 - 100.  If ps is missing or set to zero, override to 50
+    @screenshot_playback_speed = root_url_params.has_key?('ps') ? root_url_params['ps'][0].to_f : 50.0
+    if @screenshot_playback_speed < 1e-10
+      @screenshot_playback_speed = 50.0
+    end
+    
+    # YYYYMMDD
+    screenshot_begin_time_as_date = root_url_params.has_key?('bt') ? root_url_params['bt'][0] : 0.0
+    # YYYYMMDD
+    screenshot_end_time_as_date = root_url_params.has_key?('et') ? root_url_params['et'][0] : driver.execute_script("return timelapse.getDuration();").to_d.truncate(1).to_f
+    
+    $debug << "screenshot_playback_speed: #{@screenshot_playback_speed}<br>"
+    $debug << "screenshot_begin_time_as_date #{screenshot_begin_time_as_date}<br>"
+    $debug << "screenshot_end_time_as_date #{screenshot_end_time_as_date}<br>"
+    
+    @screenshot_begin_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_begin_time_as_date}')").to_f
+    @screenshot_end_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_end_time_as_date}')").to_f
+  
+    
+    $debug << "screenshot_begin_time_as_render_time: #{@screenshot_begin_time_as_render_time}<br>"
+    $debug << "screenshot_end_time_as_render_time: #{@screenshot_end_time_as_render_time}<br>"
+    
+    @dataset_num_frames = driver.execute_script("return timelapse.getNumFrames();").to_f
+    @dataset_fps = driver.execute_script("return timelapse.getFps();").to_f
+    @viewer_max_playback_rate = driver.execute_script("return timelapse.getMaxPlaybackRate();").to_f
+    
+    $debug << "viewer_max_playback_rate: #{@viewer_max_playback_rate}<br>"
+  end
+  
+  #########################
+  
+  
+  def start_thumbnail_not_screenshot()
+    #
+    # Fetch tm.json
+    #
+    
+    tm_url = "#{@root}/tm.json"
+    $debug << "tm_url: #{tm_url}<br>"
+    @tm = open(tm_url) {|i| JSON.parse(i.read)}
+    $debug << JSON.dump(@tm)
+    $debug << "<hr>"
+    
+    # Use first dataset if there are multiple
+    @dataset = @tm['datasets'][0]
+    
+    #
+    # Fetch r.json
+    #
+    
+    r_url = "#{@root}/#{@dataset['id']}/r.json"
+    $debug << "r_url: #{r_url}<br>"
+    @r = open(r_url) {|i| JSON.parse(i.read)}
+    $debug << JSON.dump(@r)
+    $debug << "<br>"
+    
+    @dataset_num_frames = @r['frames'].to_f
+    @dataset_fps = @r['fps'].to_f
+    @nframes = [@nframes, @dataset_num_frames].min
+    
+    #
+    # Parse bounds
+    #
+    
+    timemachine_width = @r['width']
+    timemachine_height = @r['height']
+    $debug << "timemachine dims: #{timemachine_width} x #{timemachine_height}<br>"
+    
+    if @boundsNWSE
+      projection_bounds = @tm['projection-bounds'] or raise "boundsNWSE were specified, but #{tm_url} is missing projection-bounds"
+      
+      projection = MercatorProjection.new(projection_bounds, timemachine_width, timemachine_height)
+      $debug << "projection-bounds: #{JSON.dump(projection_bounds)}<br>"
+      
+      $debug << "boundsNWSE: #{@boundsNWSE.join(', ')}<br>"
+      ne = projection.latlngToPoint({'lat' => @boundsNWSE[0], 'lng' => @boundsNWSE[1]})
+      sw = projection.latlngToPoint({'lat' => @boundsNWSE[2], 'lng' => @boundsNWSE[3]})
+      
+      @bounds = Bounds.new(Point.new(ne['x'], ne['y']), Point.new(sw['x'], sw['y']))
+      
+    else
+      @bounds = Bounds.new(Point.new(@boundsLTRB[0], @boundsLTRB[1]),
+                          Point.new(@boundsLTRB[2], @boundsLTRB[3]))
+    end
+    
+    @input_aspect_ratio = @bounds.size.x.to_f / @bounds.size.y
+    $debug << "bounds: #{@bounds}<br>"
+  end
+  
+  #################################
+  
+  
+  def capture_frames_from_screenshot()
+    begin
+      start_frame ||= 0
+      total_chrome_frames = 0
+      
+      @tmpfile_screenshot_input_path = "#{@tmp_dir}/screenshots.#{Process.pid}.#{(Time.now.to_f)}"
+      FileUtils.mkdir_p(@tmpfile_screenshot_input_path) unless File.exists?(@tmpfile_screenshot_input_path)
+      
+      screenshot_playback_rate = (100.0 / @screenshot_playback_speed)
+      video_duration_in_secs = (@screenshot_end_time_as_render_time - @screenshot_begin_time_as_render_time) /  (@viewer_max_playback_rate / screenshot_playback_rate)
+      @nframes = @is_image ? 1 : (video_duration_in_secs * @desired_fps).ceil
+      
+      if @nframes < 0
+        @nframes = 1
       end
       
-
-      thumbnail_worker_hostname = File.basename(lock).split('.')[2..-1].join('.')
-      vlog(0, "Thumbnail worker #{thumbnail_worker_hostname}")
-
-      Selenium::WebDriver.logger.output = STDERR
-      #Selenium::WebDriver.logger.level = :info
-
-      def queue_pop_nonblock(queue)
-        begin
-          return queue.pop(non_block=true)
-        rescue ThreadError
-          return nil
-        end
+      vlog(0, "Need to compute #{@nframes} frames")
+      
+      if @nframes > 2500
+        vlog(0, "Too many frames to compute #{@nframes}")
+        raise "Too many frames to compute #{@nframes}"
       end
-
-      extra_css = "";
-
-      make_chrome = ->(shardno, url, output_width, output_height, screenshot_bounds) {
-        before = Time.now
-        options = Selenium::WebDriver::Chrome::Options.new
-        options.add_argument('--headless')
-        options.add_argument('--hide-scrollbars')
-        driver = Selenium::WebDriver.for :chrome, options: options
-        vlog(shardno, "make_chrome loading #{url}")
-
-        # Resize the window to desired width/height.
-        driver.manage.window.resize_to(output_width, output_height)
-        # Navigate to the page; will block until the load is complete.
-        # Note: Any ajax requests or large data files may not be loaded yet.
-        #       We take care of that further down when taking the actual screenshots.
-        driver.navigate.to url
-        vlog(shardno, "make_chrome: #{driver.execute_script('{canvasLayer.setAnimate(false); return timelapse.frameno}')} frames before setAnimate(false)");
-
-        # Just in case
-        sleep(2)
-
-        driver.execute_script("timelapse.setNewView(#{screenshot_bounds.to_json}, true);" + extra_css)
-        ## Just in case
-        #sleep(1)
-
-        vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
-        return driver
-      }
-
-      # Convert URL encoded characters back to their original values
-      root.gsub!("03D", "=")
-      root.gsub!("02C", ",")
-      # Mistakes were made when hex values were chosen for # and &
-      # We have to do extra work do convert them back and ensure that we
-      # do not accidently convert real sequences of these digits
-      root.scan(/026\w+=/).each do |m|
-        root.gsub!(m, m.gsub("026", "&"))
-      end
-      root.scan(/023\w+=/).each do |m|
-        root.gsub!(m, m.gsub("026", "#"))
-      end
-
-      root += root.include?("#") ? "&" : "#"
-
-      screenshot_from_video = root.include?("blsat")
-      vlog(0, "root #{root}")
-      root_url_params = CGI::parse(root.split('#')[1])
-      vlog(0, "root_url_params #{root_url_params}")
-
-      if cgi.params.has_key?('minimalUI')
-        root += "minimalUI=true"
-      elsif cgi.params.has_key?('timestampOnlyUI')
-        root += "timestampOnlyUI=true"
-        extra_css = "$('.captureTime.minimalUIMode').css('transform', 'translate(-50%,0)').css('left', '50%');"
-        #extra_css = "$('.captureTime.minimalUIMode').css('left', '50%');"
-      else
-        root += "disableUI=true"
-      end
-
-      if cgi.params.has_key?('baseMapsNoLabels')
-        root += 'baseMapsNoLabels=true'
-      end
-
-      output_width = cgi.params['width'][0].to_i || 128
-      output_height = cgi.params['height'][0].to_i || 74
-
-      #
-      # Parse bounds
-      #
-
-      screenshot_bounds = {}
-      if boundsFromSharelink
-        view = root_url_params['v'][0].split(',')
-        if view[-1] == 'pts'
-          screenshot_bounds = {'bbox' => {'xmin' => view[0].to_f, 'ymin' => view[1].to_f}, 'xmax' => view[2].to_f, 'ymax' => view[3].to_f}
-        elsif view[-1] == 'latLng'
-          screenshot_bounds = {'center' => {'lat' => view[0].to_f, 'lng' => view[1].to_f}, 'zoom' => view[2].to_f}
-        else
-          vlog(0, 'boundsFromSharelink parsing failed')
-          raise 'boundsFromSharelink parsing failed'
-        end
-      elsif boundsNWSE
-        screenshot_bounds['bbox'] = {}
-        screenshot_bounds['bbox']['ne'] = {'lat' => boundsNWSE[0], 'lng' => boundsNWSE[1]}
-        screenshot_bounds['bbox']['sw'] = {'lat' => boundsNWSE[2], 'lng' => boundsNWSE[3]}
-      else
-        screenshot_bounds['bbox'] = {}
-        screenshot_bounds['bbox']['xmin'] = boundsLTRB[0]
-        screenshot_bounds['bbox']['ymin'] = boundsLTRB[1]
-        screenshot_bounds['bbox']['xmax'] = boundsLTRB[2]
-        screenshot_bounds['bbox']['ymax'] = boundsLTRB[3]
-      end
-      vlog(0, "screenshot_bounds #{screenshot_bounds}")
-
-      driver = make_chrome.call(0, root, output_width, output_height, screenshot_bounds)
-      vlog(0, "CHECKPOINTTHUMBNAIL CHROMERUNNING #{JSON.generate($stats)}")
-
-      # 0 - 100.  If ps is missing or set to zero, override to 50
-      screenshot_playback_speed = root_url_params.has_key?('ps') ? root_url_params['ps'][0].to_f : 50.0
-      if screenshot_playback_speed < 1e-10
-        screenshot_playback_speed = 50.0
-      end
-                                          
-      # YYYYMMDD
-      screenshot_begin_time_as_date = root_url_params.has_key?('bt') ? root_url_params['bt'][0] : 0.0
-      # YYYYMMDD
-      screenshot_end_time_as_date = root_url_params.has_key?('et') ? root_url_params['et'][0] : driver.execute_script("return timelapse.getDuration();").to_d.truncate(1).to_f
-
-      debug << "screenshot_playback_speed: #{screenshot_playback_speed}<br>"
-      debug << "screenshot_begin_time_as_date #{screenshot_begin_time_as_date}<br>"
-      debug << "screenshot_end_time_as_date #{screenshot_end_time_as_date}<br>"
-
-      screenshot_begin_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_begin_time_as_date}')").to_f
-      screenshot_end_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_end_time_as_date}')").to_f
-
-      debug << "screenshot_begin_time_as_render_time: #{screenshot_begin_time_as_render_time}<br>"
-      debug << "screenshot_end_time_as_render_time: #{screenshot_end_time_as_render_time}<br>"
-
-      dataset_num_frames = driver.execute_script("return timelapse.getNumFrames();").to_f
-      dataset_fps = driver.execute_script("return timelapse.getFps();").to_f
-      viewer_max_playback_rate = driver.execute_script("return timelapse.getMaxPlaybackRate();").to_f
-
-      debug << "viewer_max_playback_rate: #{viewer_max_playback_rate}<br>"
-    else
-
-      #
-      # Fetch tm.json
-      #
-
-      tm_url = "#{root}/tm.json"
-      debug << "tm_url: #{tm_url}<br>"
-      tm = open(tm_url) {|i| JSON.parse(i.read)}
-      debug << JSON.dump(tm)
-      debug << "<hr>"
-
-      # Use first dataset if there are multiple
-      dataset = tm['datasets'][0]
-
-      #
-      # Fetch r.json
-      #
-
-      r_url = "#{root}/#{dataset['id']}/r.json"
-      debug << "r_url: #{r_url}<br>"
-      r = open(r_url) {|i| JSON.parse(i.read)}
-      debug << JSON.dump(r)
-      debug << "<br>"
-
-      dataset_num_frames = r['frames'].to_f
-      dataset_fps = r['fps'].to_f
-      nframes = [nframes, dataset_num_frames].min
-
-      #
-      # Parse bounds
-      #
-
-      timemachine_width = r['width']
-      timemachine_height = r['height']
-      debug << "timemachine dims: #{timemachine_width} x #{timemachine_height}<br>"
-
-      if boundsNWSE
-        projection_bounds = tm['projection-bounds'] or raise "boundsNWSE were specified, but #{tm_url} is missing projection-bounds"
-
-        projection = MercatorProjection.new(projection_bounds, timemachine_width, timemachine_height)
-        debug << "projection-bounds: #{JSON.dump(projection_bounds)}<br>"
-
-        debug << "boundsNWSE: #{boundsNWSE.join(', ')}<br>"
-        ne = projection.latlngToPoint({'lat' => boundsNWSE[0], 'lng' => boundsNWSE[1]})
-        sw = projection.latlngToPoint({'lat' => boundsNWSE[2], 'lng' => boundsNWSE[3]})
-
-        bounds = Bounds.new(Point.new(ne['x'], ne['y']), Point.new(sw['x'], sw['y']))
-
-      else
-        bounds = Bounds.new(Point.new(boundsLTRB[0], boundsLTRB[1]),
-                            Point.new(boundsLTRB[2], boundsLTRB[3]))
-      end
-
-      input_aspect_ratio = bounds.size.x.to_f / bounds.size.y
-      debug << "bounds: #{bounds}<br>"
-    end
-
-    #
-    # Requested output size
-    #
-
-    output_width = cgi.params['width'][0]
-    output_width &&= output_width.to_i
-    output_height = cgi.params['height'][0]
-    output_height &&= output_height.to_i
-
-    ignore_aspect_ratio = cgi.params.has_key? 'ignoreAspectRatio'
-
-    if !output_width && !output_height
-      raise "Must specify at least one of 'width' and 'height'"
-    elsif output_width && output_height
-      if  !ignore_aspect_ratio
-        #
-        # output aspect ratio was specified.  Tweak input bounds to match output aspect ratio, by selecting
-        # new bounds with the same center and area as original.
-        #
-        output_aspect_ratio = output_width.to_f / output_height
-        if not from_screenshot
-          aspect_factor = Math.sqrt(output_aspect_ratio / input_aspect_ratio)
-          bounds = Bounds.with_center(bounds.center,
-                                    Point.new(bounds.size.x * aspect_factor, bounds.size.y / aspect_factor))
-          debug << "Modified bounds to #{bounds} to preserve aspect ratio<br>"
-        end
-      else
-        debug << "width, height, ignoreAspectRatio all specified;  using width and height as specified<br>"
-      end
-    elsif output_width
-      output_height = (output_width / input_aspect_ratio).round
-    else
-      output_width = (output_height * input_aspect_ratio).round
-    end
-
-    # Min width/height allowed by ffmpeg is 46x46
-    output_width = [output_width, 46].max
-    output_height = [output_height, 46].max
-
-    # Ensure that the width and height are multiples of 2 for ffmpeg
-    output_width = ((output_width - 1) / 2 + 1) * 2
-    output_height = ((output_height - 1) / 2 + 1) * 2
-
-    debug << "output size: #{output_width}px x #{output_height}px<br>"
-
-    frame_time = cgi.params['frameTime'][0].to_f
-    start_frame = cgi.params['startFrame'][0]
-
-    # If both frameTime and startFrame are passed in, startFrame takes precedence.
-    if start_frame
-      dataset_frame_length = (dataset_num_frames / dataset_fps) / dataset_num_frames
-      start_frame = start_frame.to_i
-      frame_time = start_frame * dataset_frame_length
-    else
-      dataset_frame_length = (dataset_num_frames / dataset_fps) / dataset_num_frames
-      start_frame = (frame_time / dataset_frame_length).floor
-    end
-
-    max_time = (dataset_num_frames - 0.25).to_f / dataset_fps
-    time = [0, [max_time, frame_time.to_f].min].max
-
-    debug << "Time to seek to: #{time}<br>"
-
-    leader_seconds = 0
-    if r and r.has_key?('leader')
-      # FIXME: fractional leaders...
-      leader_seconds = r['leader'].floor / dataset_fps
-      debug << "Adding #{leader_seconds} seconds of leader<br>"
-      time += leader_seconds
-    end
-
-    tmpfile = "#{tmp_dir}/#{Process.pid}.#{(Time.now.to_f)}.#{format}"
-
-    tmpfile_root_path = File.dirname(tmpfile)
-
-    is_image = true
-    is_video = (format == 'mp4' or format == 'webm') ? true : false
-
-    raw_formats = ['rgb24', 'gray8']
-
-    if raw_formats.include? format or format == 'gif' or is_video
-      is_image = false
-    end
-
-
-    #
-    # Fps for video output
-    #
-    #
-    video_output_fps = ""
-    desired_fps = dataset_fps
-    if cgi.params.has_key? 'fps'
-      desired_fps = cgi.params['fps'][0].to_f
-      if is_video
-        raise "Output fps is required and must be greater than 0" unless desired_fps
-        video_output_fps = "-r #{desired_fps}"
-      end
-    end
-
-
-    #
-    # Take a screenshot of a page passed in as the root
-    #
-    #
-    if from_screenshot
-      begin
-        start_frame ||= 0
-        total_chrome_frames = 0
-
-        tmpfile_screenshot_input_path = "#{tmp_dir}/screenshots.#{Process.pid}.#{(Time.now.to_f)}"
-        FileUtils.mkdir_p(tmpfile_screenshot_input_path) unless File.exists?(tmpfile_screenshot_input_path)
-
-        screenshot_playback_rate = (100.0 / screenshot_playback_speed)
-        video_duration_in_secs = (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) /  (viewer_max_playback_rate / screenshot_playback_rate)
-        nframes = is_image ? 1 : (video_duration_in_secs * desired_fps).ceil
-
-        if nframes < 0
-          nframes = 1
-        end
-
-        vlog(0, "Need to compute #{nframes} frames")
-
-        if nframes > 2500
-          vlog(0, "Too many frames to compute #{nframes}")
-          raise "Too many frames to compute #{nframes}"
-        end
+      
+      frame_queue = Queue.new
+      (0 ... @nframes).each { |i| frame_queue << i }
+      
+      # Capture frames from ... to-1
+      new_capture_frames_thread = ->(shardno, driver) {
+        return Thread.new {
+          vlog(shardno, "Shard starting");
           
-        frame_queue = Queue.new
-        (0 ... nframes).each { |i| frame_queue << i }
-
-        # Capture frames from ... to-1
-        new_capture_frames_thread = ->(shardno, driver) {
-          return Thread.new {
-            vlog(shardno, "Shard starting");
-
-            while true do
+          while true do
+            frame = queue_pop_nonblock(frame_queue)
+            if frame == nil
+              break
+            end
+            if not driver then
+              frame_queue << frame
+              driver = make_chrome(shardno, @root)
               frame = queue_pop_nonblock(frame_queue)
               if frame == nil
                 break
               end
-              if not driver then
+            end
+            seek_time = (frame.to_f / [1.0, (@nframes.to_f - 1.0)].max) * (@screenshot_end_time_as_render_time - @screenshot_begin_time_as_render_time) + @screenshot_begin_time_as_render_time
+            $debug << "frame #{frame} seeking to: #{seek_time}<br>"
+            vlog(shardno, "frame #{frame} seeking to: #{seek_time}")
+            
+            before = Time.now
+            driver.execute_script("timelapse.seek(#{seek_time});")
+            
+            while true do
+              # Wait at most 30 seconds until we assume things are drawn
+              if (Time.now - before) > 30
+                vlog(shardno, "giving up on frame #{frame} after #{((Time.now - before) * 1000).round}ms; stopping driver")
                 frame_queue << frame
-                driver = make_chrome.call(shardno, root, output_width, output_height, screenshot_bounds)
-                frame = queue_pop_nonblock(frame_queue)
-                if frame == nil
-                  break
-                end
+                total_chrome_frames += driver.execute_script("return timelapse.frameno")
+                driver.quit
+                driver = nil
+                break
               end
-              seek_time = (frame.to_f / [1.0, (nframes.to_f - 1.0)].max) * (screenshot_end_time_as_render_time - screenshot_begin_time_as_render_time) + screenshot_begin_time_as_render_time
-              debug << "frame #{frame} seeking to: #{seek_time}<br>"
-              vlog(shardno, "frame #{frame} seeking to: #{seek_time}")
-
-              before = Time.now
-              driver.execute_script("timelapse.seek(#{seek_time});")
-
-              while true do
-                # Wait at most 30 seconds until we assume things are drawn
-                if (Time.now - before) > 30
-                  vlog(shardno, "giving up on frame #{frame} after #{((Time.now - before) * 1000).round}ms; stopping driver")
-                  frame_queue << frame
-                  total_chrome_frames += driver.execute_script("return timelapse.frameno")
-                  driver.quit
-                  driver = nil
-                  break
-                end
-                complete = driver.execute_script(
-                  "{" +
-                  extra_css +
-                  "timelapse.setNewView(#{screenshot_bounds.to_json}, true);" +
-                  "timelapse.seek(#{seek_time});" +
-                  "canvasLayer.update_();" +
-                  "return timelapse.lastFrameCompletelyDrawn && timelapse.frameno;" +
-                  "}"
-                )
-                if complete
-                  driver.save_screenshot("#{tmpfile_screenshot_input_path}/#{'%04d' % frame}.png")
-                  vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms (chrome frame #{complete})");
-                  break
-                else
-                  vlog(shardno, "frame #{frame} called update but not ready yet");
-                  sleep(0.05);
-                end
+              complete = driver.execute_script(
+                "{" +
+                @extra_css +
+                "timelapse.setNewView(#{@screenshot_bounds.to_json}, true);" +
+                "timelapse.seek(#{seek_time});" +
+                "canvasLayer.update_();" +
+                "return timelapse.lastFrameCompletelyDrawn && timelapse.frameno;" +
+                "}"
+              )
+              if complete
+                driver.save_screenshot("#{@tmpfile_screenshot_input_path}/#{'%04d' % frame}.png")
+                vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms (chrome frame #{complete})");
+                break
+              else
+                vlog(shardno, "frame #{frame} called update but not ready yet");
+                sleep(0.05);
               end
             end
-            vlog(shardno, "Shard finished");
-            if driver then
-              total_chrome_frames += driver.execute_script("return timelapse.frameno")
-              driver.quit
-            end
-          }
-        }
-
-        nshards = (nframes / 5).floor
-        if nshards < 1
-          nshards = 1
-        end
-        if nshards > 6
-          nshards = 6
-        end
-
-        $stats['nshards'] = nshards
-
-        shard_threads = []
-
-        (0 ... nshards).each do |shardno|
-          if shardno == 0
-            thread_driver = driver
-          else
-            thread_driver = nil
           end
-          shard_threads << new_capture_frames_thread.call(shardno, thread_driver)
-        end
-
-        shard_threads.each { |shard_thread| shard_thread.join }
-
-        vlog(0, "Chrome rendered a total of #{total_chrome_frames} frames, for #{nframes} frames needed (#{"%.1f" % (nframes * 100.0 / total_chrome_frames)}%)")
-
-        $stats['chromeRenderTimeSecs'] = Time.now - $begin_time
-        $stats['videoFrameCount'] = nframes
-        $stats['frameEfficiency'] = nframes.to_f / total_chrome_frames
-        vlog(0, "CHECKPOINTTHUMBNAIL CHROMEFINISHED #{JSON.generate($stats)}")
-      rescue Selenium::WebDriver::Error::TimeOutError
-        raise "Error taking screenshot. Data failed to load."
+          vlog(shardno, "Shard finished");
+          if driver then
+            total_chrome_frames += driver.execute_script("return timelapse.frameno")
+            driver.quit
+          end
+        }
+      }
+      
+      nshards = (@nframes / 5).floor
+      if nshards < 1
+        nshards = 1
       end
-      semaphore.release
-    else
-      #
-      # Search for tile from the tile tree
-      #
-
-      tile_url = crop = nil
-
-      output_subsample = [bounds.size.x / output_width, bounds.size.y / output_height].max
-
-      debug << "output_subsample: #{output_subsample}<br>"
-
-      # ffmpeg refuses to subsample more than this?
-      maximum_ffmpeg_subsample = 64
-
-      tile_spacing = Point.new(r['tile_width'], r['tile_height'])
-      video_size = Point.new(r['video_width'], r['video_height'])
-
-      # Start from highest level (most detailed) and "zoom out" until a tile is found
-      # to completely cover the requested area
-      r['nlevels'].times do |i|
-        subsample = 1 << i
-        tile_coord = (bounds.min / subsample / tile_spacing).floor
-        level = r['nlevels'] - i - 1
-
-        # Reject level if it would require subsampling more than ffmpeg allows
-        required_subsample = output_subsample / subsample
-        if required_subsample > maximum_ffmpeg_subsample
-          debug << "level #{level} would have required tile to be subsampled by #{required_subsample}, rejecting<br>"
-          next
+      if nshards > 6
+        nshards = 6
+      end
+      
+      $stats['nshards'] = nshards
+      
+      shard_threads = []
+      
+      (0 ... nshards).each do |shardno|
+        if shardno == 0
+          # Reuse the first driver
+          thread_driver = @first_driver
+        else
+          thread_driver = nil
         end
+        shard_threads << new_capture_frames_thread.call(shardno, thread_driver)
+      end
+      
+      shard_threads.each { |shard_thread| shard_thread.join }
+      
+      vlog(0, "Chrome rendered a total of #{total_chrome_frames} frames, for #{@nframes} frames needed (#{"%.1f" % (@nframes * 100.0 / total_chrome_frames)}%)")
+      
+      $stats['chromeRenderTimeSecs'] = Time.now - $begin_time
+      $stats['videoFrameCount'] = @nframes
+      $stats['frameEfficiency'] = @nframes.to_f / total_chrome_frames
+      vlog(0, "CHECKPOINTTHUMBNAIL CHROMEFINISHED #{JSON.generate($stats)}")
+    rescue Selenium::WebDriver::Error::TimeOutError
+      raise "Error taking screenshot. Data failed to load."
+    end
+    @semaphore.release
+  end
 
+  def find_tile_for_non_screenshot()
+    #
+    # Search for tile from the tile tree
+    #
+    
+    @tile_url = @crop = nil
+    
+    output_subsample = [@bounds.size.x / @output_width, @bounds.size.y / @output_height].max
+    
+    $debug << "output_subsample: #{output_subsample}<br>"
+    
+    # ffmpeg refuses to subsample more than this?
+    maximum_ffmpeg_subsample = 64
+    
+    tile_spacing = Point.new(@r['tile_width'], @r['tile_height'])
+    video_size = Point.new(@r['video_width'], @r['video_height'])
+    
+    # Start from highest level (most detailed) and "zoom out" until a tile is found
+    # to completely cover the requested area
+    @r['nlevels'].times do |i|
+      subsample = 1 << i
+      tile_coord = (@bounds.min / subsample / tile_spacing).floor
+      level = @r['nlevels'] - i - 1
+      
+      # Reject level if it would require subsampling more than ffmpeg allows
+      required_subsample = output_subsample / subsample
+      if required_subsample > maximum_ffmpeg_subsample
+        $debug << "level #{level} would have required tile to be subsampled by #{required_subsample}, rejecting<br>"
+        next
+      end
+      
+      tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
+                               (tile_coord * tile_spacing + video_size) * subsample)
+      
+      @tile_url = "#{@root}/#{@dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{@tile_format}"
+      $debug << "subsample #{subsample}, tile #{tile_bounds} #{@tile_url} contains #{@bounds}? #{tile_bounds.contains @bounds}<br>"
+      if tile_bounds.contains @bounds or level == 0
+        $debug << "Best tile: #{tile_coord}, level: #{level} (subsample: #{subsample})<br>"
+        
+        tile_coord.x = [tile_coord.x, 0].max
+        tile_coord.y = [tile_coord.y, 0].max
+        tile_coord.x = [tile_coord.x, @r['level_info'][level]['cols'] - 1].min
+        tile_coord.y = [tile_coord.y, @r['level_info'][level]['rows'] - 1].min
+        
         tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
                                  (tile_coord * tile_spacing + video_size) * subsample)
-
-        tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{tile_format}"
-        debug << "subsample #{subsample}, tile #{tile_bounds} #{tile_url} contains #{bounds}? #{tile_bounds.contains bounds}<br>"
-        if tile_bounds.contains bounds or level == 0
-          debug << "Best tile: #{tile_coord}, level: #{level} (subsample: #{subsample})<br>"
-
-          tile_coord.x = [tile_coord.x, 0].max
-          tile_coord.y = [tile_coord.y, 0].max
-          tile_coord.x = [tile_coord.x, r['level_info'][level]['cols'] - 1].min
-          tile_coord.y = [tile_coord.y, r['level_info'][level]['rows'] - 1].min
-
-          tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
-                                   (tile_coord * tile_spacing + video_size) * subsample)
-          tile_url = "#{root}/#{dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{tile_format}"
-
-          crop = (bounds - tile_bounds.min) / subsample
-          debug << "Tile url: #{tile_url}<br>"
-          debug << "Tile crop: #{crop}<br>"
-          break
-        end
+        @tile_url = "#{@root}/#{@dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{@tile_format}"
+        
+        @crop = (@bounds - tile_bounds.min) / subsample
+        $debug << "Tile url: #{@tile_url}<br>"
+        $debug << "Tile crop: #{@crop}<br>"
+        break
       end
-      crop or raise "Didn't find containing tile"
-
-      # ffmpeg ignores negative crop bounds.  So if we have a negative crop bound,
-      # pad the upper left and offset the crop
-      pad_size = video_size
-      pad_tl = Point.new([0, -(crop.min.x.floor)].max,
-                         [0, -(crop.min.y.floor)].max)
-      crop = crop + pad_tl
-      pad_size = pad_size + pad_tl
-
-      # Clamp to max size of the padded area
-      cropX = [crop.size.x.to_i, pad_size.x.to_i].min
-      cropY = [crop.size.y.to_i, pad_size.y.to_i].min
     end
+    @crop or raise "Didn't find containing tile"
+    
+    # ffmpeg ignores negative crop bounds.  So if we have a negative crop bound,
+    # pad the upper left and offset the crop
+    @pad_size = video_size
+    @pad_tl = Point.new([0, -(@crop.min.x.floor)].max,
+                       [0, -(@crop.min.y.floor)].max)
+    @crop = @crop + @pad_tl
+    @pad_size = @pad_size + @pad_tl
+    
+    # Clamp to max size of the padded area
+    @cropX = [@crop.size.x.to_i, @pad_size.x.to_i].min
+    @cropY = [@crop.size.y.to_i, @pad_size.y.to_i].min
+  end
 
+
+  def encode_frames()
     #
     # Labels
     #
     #
     label = ''
 
-    if cgi.params.has_key? 'labelsFromDataset' or cgi.params.has_key? 'labels'
+    if @cgi.params.has_key? 'labelsFromDataset' or @cgi.params.has_key? 'labels'
       frame_labels = []
 
       # Label attribute order: color|size|x-pos|y-pos
-      label_attributes = (cgi.params.has_key? 'labelAttributes') ? cgi.params['labelAttributes'][0].split("|") : []
-      raise "Label attributes specified, but none provided" if label_attributes.empty? and cgi.params.has_key? 'labelAttributes'
+      label_attributes = (@cgi.params.has_key? 'labelAttributes') ? @cgi.params['labelAttributes'][0].split("|") : []
+      raise "Label attributes specified, but none provided" if label_attributes.empty? and @cgi.params.has_key? 'labelAttributes'
       label_color = (label_attributes[0] and !label_attributes[0].empty? and ((label_attributes[0].length == 8 and label_attributes[0].start_with?("0x")) or label_attributes[0] != 'null')) ? label_attributes[0] : "yellow"
       label_size = (label_attributes[1] and !label_attributes[1].empty? and (label_attributes[1].to_i.to_s == label_attributes[1]) and label_attributes[1] != 'null') ? label_attributes[1] : "20"
       label_x_pos = (label_attributes[2] and !label_attributes[2].empty? and (label_attributes[2].to_i.to_s == label_attributes[2]) and label_attributes[2] != 'null') ? (label_attributes[2].to_i - 1) : "9" # by default it has an x-offset of 1
       label_y_pos = (label_attributes[3] and !label_attributes[3].empty? and (label_attributes[3].to_i.to_s == label_attributes[3]) and label_attributes[3] != 'null') ? label_attributes[3] : "12" # really should be 10, but visually 12 appears better
 
-      if cgi.params.has_key? 'labelsFromDataset'
-        frame_labels = tm['capture-times']
+      if @cgi.params.has_key? 'labelsFromDataset'
+        frame_labels = @tm['capture-times']
         raise "Capture times are missing for this dataset" if !frame_labels or frame_labels.empty?
-        starting_index = ((time - leader_seconds) * dataset_fps)
+        starting_index = ((@time - @leader_seconds) * @dataset_fps)
         # Truncate to 3 decimal places then take the ceiling
         starting_index = ((starting_index * 1000).floor / 1000.0).ceil
-        frame_labels = frame_labels[starting_index, nframes]
+        frame_labels = frame_labels[starting_index, @nframes]
         # Auto fit font if the user does not directly specify a size
         if (label_attributes[1].nil? || label_attributes[1].empty? || label_attributes[1] == 'null')
           # output file width - margins (i.e. left margin and always 20 margin on the right)
-          allowed_text_area_width = output_width - (label_x_pos.to_i + 20)
+          allowed_text_area_width = @output_width - (label_x_pos.to_i + 20)
           new_font_size = ((0.00000337035 * (allowed_text_area_width ** 3)) - (0.00100792 * (allowed_text_area_width ** 2)) + (0.190542 * allowed_text_area_width) - 1.31804).round
           label_size = [20, new_font_size].min
         end
       else
-        txt = cgi.params['labels'][0]
+        txt = @cgi.params['labels'][0]
         raise "Need to include at least one label in the list" if txt.empty?
         frame_labels = txt.split("|")
       end
@@ -740,12 +554,12 @@ begin
 
       # If we do not have enough labels to cover every frame, ensure that the last label is blank to prevent ffmpeg from
       # repeating the last available label across the remaining frames
-      frame_labels << "" if frame_labels.length > 1 and frame_labels.length < nframes
+      frame_labels << "" if frame_labels.length > 1 and frame_labels.length < @nframes
 
       label_cmds = ''
-      frame_length = nframes / desired_fps / nframes
+      frame_length = @nframes / @desired_fps / @nframes
       timestamp = 0
-      frame_label_cmd_file = tmpfile + ".cmd"
+      frame_label_cmd_file = @tmpfile + ".cmd"
       frame_labels.each_with_index do |time_text, index|
         # Need to escape colons for ffmpeg
         time_text.gsub!(/\:/, "\\:")
@@ -764,38 +578,38 @@ begin
       File.open(frame_label_cmd_file, 'w') { |file| file.write(label_cmds) } if frame_labels.length > 1
     end
 
-    start_dwell_in_sec = cgi.params['startDwell'][0].to_f
-    end_dwell_in_sec = cgi.params['endDwell'][0].to_f
-    interpolate_frames = cgi.params.has_key?('interpolateBetweenFrames')
+    start_dwell_in_sec = @cgi.params['startDwell'][0].to_f
+    end_dwell_in_sec = @cgi.params['endDwell'][0].to_f
+    interpolate_frames = @cgi.params.has_key?('interpolateBetweenFrames')
 
 
-    num_start_loop_frames = (desired_fps * start_dwell_in_sec).ceil
-    num_end_loop_frames = (desired_fps * end_dwell_in_sec).ceil
+    num_start_loop_frames = (@desired_fps * start_dwell_in_sec).ceil
+    num_end_loop_frames = (@desired_fps * end_dwell_in_sec).ceil
     start_loop_frame = 0
-    end_loop_frame = nframes + num_start_loop_frames - 1
+    end_loop_frame = @nframes + num_start_loop_frames - 1
 
     input_filters = ""
-    if from_screenshot
-      input_src = "-f image2 -start_number 0 -i \"#{tmpfile_screenshot_input_path}/%04d.png\" "
+    if @from_screenshot
+      input_src = "-f image2 -start_number 0 -i \"#{@tmpfile_screenshot_input_path}/%04d.png\" "
     else
-      input_src = "-ss #{sprintf('%.3f', time)} -i #{tile_url} -vframes #{nframes}"
-      input_filters += "pad=#{pad_size.x}:#{pad_size.y}:#{pad_tl.x}:#{pad_tl.y},crop=#{cropX}:#{cropY}:#{crop.min.x}:#{crop.min.y},"
+      input_src = "-ss #{sprintf('%.3f', @time)} -i #{@tile_url} -vframes #{@nframes}"
+      input_filters += "pad=#{@pad_size.x}:#{@pad_size.y}:#{@pad_tl.x}:#{@pad_tl.y},crop=#{@cropX}:#{@cropY}:#{@crop.min.x}:#{@crop.min.y},"
     end
 
-    cmd = "#{ffmpeg_path} -y #{video_output_fps} #{input_src} -filter_complex \"#{input_filters}scale=#{output_width}:#{output_height}:flags=bicubic#{label}\" -threads #{num_threads}"
+    cmd = "#{$ffmpeg_path} -y #{@video_output_fps} #{input_src} -filter_complex \"#{input_filters}scale=#{@output_width}:#{@output_height}:flags=bicubic#{label}\" -threads #{$num_threads}"
 
-    if raw_formats.include? format
-      cmd += " -f rawvideo -pix_fmt #{format}"
+    if @raw_formats.include? @format
+      cmd += " -f rawvideo -pix_fmt #{@format}"
     end
 
-    if format == 'jpg'
+    if @format == 'jpg'
       # compression quality;  lower is higher quality
       #cmd += ' -q:v 2'
       cmd += ' -qscale 2' # older syntax
     end
 
-    collapse = cgi.params.has_key? 'collapse'
-    if is_image && nframes != 1 && !collapse
+    collapse = @cgi.params.has_key? 'collapse'
+    if @is_image && @nframes != 1 && !collapse
       raise "nframes must be omitted or set to 1 when outputting an image"
     end
     
@@ -803,7 +617,7 @@ begin
     # Insert filter, if any
     #
     #
-    filter = cgi.params['filter'][0]
+    filter = @cgi.params['filter'][0]
     if filter
       if not /^[\w-]+$/.match(filter)
         raise "Sorry, filter name '#{filter}' must consist only of a-z 0-9 _ -"
@@ -813,20 +627,20 @@ begin
         raise "Sorry, filter named '#{filter}' does not seem to exist in the filter path"
       end
       # pipe:1 makes ffmpeg output to stdout
-      cmd += " pipe:1 | #{filter_path} --width #{output_width} --height #{output_height} > "
-      format = 'json' # TODO: can the filter tell us its output format?
+      cmd += " pipe:1 | #{filter_path} --width #{@output_width} --height #{@output_height} > "
+      @format = 'json' # TODO: can the filter tell us its output format?
     end
 
     #
     # Animated gif
     #
     #
-    if format == 'gif'
+    if @format == 'gif'
       # Note: As of 2012, browsers like Safari and IE do not properly render a gif that is faster than 16fps
-      if cgi.params['delay'][0] # the amount of time, in seconds, to wait between frames of the final gif
-        delay = cgi.params['delay'][0] + "/1" # in ticks per second
-      elsif cgi.params['fps'][0] # the fps of the final gif
-        delay = 100 / cgi.params['fps'][0].to_i # in centiseconds
+      if @cgi.params['delay'][0] # the amount of time, in seconds, to wait between frames of the final gif
+        delay = @cgi.params['delay'][0] + "/1" # in ticks per second
+      elsif @cgi.params['fps'][0] # the fps of the final gif
+        delay = 100 / @cgi.params['fps'][0].to_i # in centiseconds
       else
         delay = 20 # default 5 fps
       end
@@ -837,9 +651,9 @@ begin
     # video (mp4/webm)
     #
     #
-    if format == 'mp4'
+    if @format == 'mp4'
       cmd += " -vcodec libx264 -preset slow -pix_fmt yuv420p -crf 20 -g 10 -bf 0 -movflags faststart "
-    elsif format == 'webm'
+    elsif @format == 'webm'
       # TODO: These may not be the best webm settings
       cmd += " -qmin 0 -qmax 34 -crf 10 -b:v 1M "
     end
@@ -852,13 +666,13 @@ begin
       cmd += " -f image2pipe -vcodec ppm - | /usr/local/bin/gm convert -evaluate-sequence min - "
     end
 
-    cmd += " \"#{tmpfile}\""
+    cmd += " \"#{@tmpfile}\""
 
-    debug << "Running: '#{cmd}'<br>"
+    $debug << "Running: '#{cmd}'<br>"
     output = `#{cmd} 2>&1`;
     if not $?.success?
-      debug << "ffmpeg failed with output:<br>"
-      debug << "<pre>#{output}</pre>"
+      $debug << "ffmpeg failed with output:<br>"
+      $debug << "<pre>#{output}</pre>"
       raise "Error executing '#{cmd}'"
     end
 
@@ -876,80 +690,343 @@ begin
     post_process_filters = ""
 
     # Dwell time filter
-    post_process_filters += "loop=#{num_start_loop_frames}:1:#{start_loop_frame},setpts=N/FRAME_RATE/TB," if start_dwell_in_sec > 0 and (format == 'gif' or is_video)
-    post_process_filters += "loop=#{num_end_loop_frames}:1:#{end_loop_frame},setpts=N/FRAME_RATE/TB," if end_dwell_in_sec > 0 and (format == 'gif' or is_video)
+    post_process_filters += "loop=#{num_start_loop_frames}:1:#{start_loop_frame},setpts=N/FRAME_RATE/TB," if start_dwell_in_sec > 0 and (@format == 'gif' or is_video)
+    post_process_filters += "loop=#{num_end_loop_frames}:1:#{end_loop_frame},setpts=N/FRAME_RATE/TB," if end_dwell_in_sec > 0 and (@format == 'gif' or is_video)
 
     # 'Fader shader' filter
-    post_process_filters += "minterpolate='mi_mode=mci:mc_mode=aobmc:vsbmc=1:fps=60'," if interpolate_frames and (format == 'gif' or is_video)
+    post_process_filters += "minterpolate='mi_mode=mci:mc_mode=aobmc:vsbmc=1:fps=60'," if interpolate_frames and (@format == 'gif' or is_video)
 
     post_process_filters.chomp!(',')
     unless post_process_filters.empty?
-      tmpfile_postprocess = "#{tmp_dir}/#{Process.pid}.#{(Time.now.to_f)}-pp.#{format}"
-      cmd = "#{ffmpeg_path} -y -i #{tmpfile} -filter_complex \"#{post_process_filters}\" -threads #{num_threads} \"#{tmpfile_postprocess}\""
-      debug << "Running post process filters: '#{cmd}'<br>"
+      tmpfile_postprocess = "#{@tmp_dir}/#{Process.pid}.#{(Time.now.to_f)}-pp.#{@format}"
+      cmd = "#{$ffmpeg_path} -y -i #{@tmpfile} -filter_complex \"#{post_process_filters}\" -threads #{$num_threads} \"#{tmpfile_postprocess}\""
+      $debug << "Running post process filters: '#{cmd}'<br>"
       output = `#{cmd} 2>&1`;
       if not $?.success?
-        debug << "ffmpeg failed with output:<br>"
-        debug << "<pre>#{output}</pre>"
+        $debug << "ffmpeg failed with output:<br>"
+        $debug << "<pre>#{output}</pre>"
         raise "Error executing '#{cmd}'"
       end
-      File.delete(tmpfile)
-      tmpfile = tmpfile_postprocess
+      File.delete(@tmpfile)
+      @tmpfile = tmpfile_postprocess
     end
+  end
 
-    image_data = open(tmpfile, 'rb') {|i| i.read}
-    $stats['sizeBytes'] = image_data.size
-    $stats['totalTimeSecs'] = Time.now - $begin_time
-    pt = Process.times
-    $stats['cpuTime'] = pt.utime + pt.stime + pt.cutime + pt.cstime
-    vlog(0, "ENDTHUMBNAIL #{$request_url} #{JSON.generate($stats)}")
 
-    if cache_file
-      File.rename tmpfile, cache_file
-      vlog(0, "Moved output file to cache: #{cache_file}")
+  def compute_thumbnail()
+    @boundsNWSE = parse_bounds(@cgi, 'boundsNWSE')
+    @boundsLTRB = parse_bounds(@cgi, 'boundsLTRB')
+    if !@boundsNWSE and !@boundsLTRB
+      if @from_screenshot
+        @boundsFromSharelink = true
+      else
+        raise "Must specify boundsNWSE or boundsLTRB, unless fromScreenshot"
+      end
     else
-      vlog(0, "Deleted output file");
-      File.unlink tmpfile
+      if @boundsNWSE and @boundsLTRB
+        raise "Both boundsNWSE and boundsLTRB were specified;  please specify only one"
+      end
     end
-
-    # Cleanup screenshot work
-    if from_screenshot
-      FileUtils.rm_rf(tmpfile_screenshot_input_path)
+    
+    if @from_screenshot
+      start_thumbnail_from_screenshot()
+    else
+      start_thumbnail_not_screenshot()
     end
+    
+    #
+    # Requested output size
+    #
+    
+    @output_width = @cgi.params['width'][0]
+    @output_width &&= @output_width.to_i
+    @output_height = @cgi.params['height'][0]
+    @output_height &&= @output_height.to_i
+    
+    ignore_aspect_ratio = @cgi.params.has_key? 'ignoreAspectRatio'
+    
+    if !@output_width && !@output_height
+      raise "Must specify at least one of 'width' and 'height'"
+    elsif @output_width && @output_height
+      if  !ignore_aspect_ratio
+        #
+        # output aspect ratio was specified.  Tweak input bounds to match output aspect ratio, by selecting
+        # new bounds with the same center and area as original.
+        #
+        output_aspect_ratio = @output_width.to_f / @output_height
+        if not @from_screenshot
+          aspect_factor = Math.sqrt(output_aspect_ratio / @input_aspect_ratio)
+          @bounds = Bounds.with_center(@bounds.center,
+                                    Point.new(@bounds.size.x * aspect_factor, @bounds.size.y / aspect_factor))
+          $debug << "Modified bounds to #{@bounds} to preserve aspect ratio<br>"
+        end
+      else
+        $debug << "width, height, ignoreAspectRatio all specified;  using width and height as specified<br>"
+      end
+    elsif @output_width
+      @output_height = (@output_width / @input_aspect_ratio).round
+    else
+      @output_width = (@output_height * @input_aspect_ratio).round
+    end
+    
+    # Min width/height allowed by ffmpeg is 46x46
+    @output_width = [@output_width, 46].max
+    @output_height = [@output_height, 46].max
+    
+    # Ensure that the width and height are multiples of 2 for ffmpeg
+    @output_width = ((@output_width - 1) / 2 + 1) * 2
+    @output_height = ((@output_height - 1) / 2 + 1) * 2
+    
+    $debug << "output size: #{@output_width}px x #{@output_height}px<br>"
+    
+    frame_time = @cgi.params['frameTime'][0].to_f
+    start_frame = @cgi.params['startFrame'][0]
+    
+    # If both frameTime and startFrame are passed in, startFrame takes precedence.
+    dataset_frame_length = (@dataset_num_frames / @dataset_fps) / @dataset_num_frames
+    if start_frame
+      start_frame = start_frame.to_i
+      frame_time = start_frame * dataset_frame_length
+    else
+      start_frame = (frame_time / dataset_frame_length).floor
+    end
+    
+    max_time = (@dataset_num_frames - 0.25).to_f / @dataset_fps
+    @time = [0, [max_time, frame_time.to_f].min].max
+    
+    $debug << "Time to seek to: #{@time}<br>"
+    
+    @leader_seconds = 0
+    if @r and @r.has_key?('leader')
+      # FIXME: fractional leaders...
+      @leader_seconds = @r['leader'].floor / @dataset_fps
+      $debug << "Adding #{@leader_seconds} seconds of leader<br>"
+      @time += @leader_seconds
+    end
+    
+    tmpfile_root_path = File.dirname(@tmpfile)
+    
+    @is_image = true
+    is_video = (@format == 'mp4' or @format == 'webm') ? true : false
+    
+    @raw_formats = ['rgb24', 'gray8']
+    
+    if @raw_formats.include? @format or @format == 'gif' or is_video
+      @is_image = false
+    end
+    
+    #
+    # Fps for video output
+    #
+    #
+    @video_output_fps = ""
+    @desired_fps = @dataset_fps
+    if @cgi.params.has_key? 'fps'
+      @desired_fps = @cgi.params['fps'][0].to_f
+      if is_video
+        raise "Output fps is required and must be greater than 0" unless @desired_fps
+        @video_output_fps = "-r #{@desired_fps}"
+      end
+    end
+    
 
     #
-    # Done
+    # Take a screenshot of a page passed in as the root
     #
+    #
+    if @from_screenshot
+      capture_frames_from_screenshot()
+    else
+      find_tile_for_non_screenshot()
+    end
+
+    encode_frames()
   end
 
-  debug_mode = cgi.params.has_key? 'debug'
+  def delegate_thumbnail(thumbnail_worker_hostname)
+    url = "http://#{thumbnail_worker_hostname}#{ENV['REQUEST_URI']}"
+    $stats['delegatedTo'] = url
+    vlog(0, "CHECKPOINTTHUMBNAIL DELEGATION_START #{JSON.generate($stats)}")
+    vlog(0, "Delegating thumbnail to #{thumbnail_worker_hostname}")
+    thumbnail_data = Net::HTTP.get(URI(url))
+    vlog(0, "Thumbnail returned from #{thumbnail_worker_hostname}, length #{thumbnail_data.size}")
+    vlog(0, "CHECKPOINTTHUMBNAIL DELEGATION_FINISHED #{JSON.generate($stats)}")
 
-  if debug_mode
-    debug << "</body></html>"
-    cgi.out {debug.join('')}
-  elsif not cache_file
-    print image_data
-    exit
-  else
-    mime_types = {
-      'gif' => 'image/gif',
-      'jpg' => 'image/jpeg',
-      'json' => 'application/json',
-      'mp4' => 'video/mp4',
-      'webm' => 'video/webm',
-      'png' => 'image/png'
-    }
-    mime_type = mime_types[format] || 'application/octet-stream'
-    cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image_data}
+    File.open(@tmpfile, 'w') { |file| file.write(thumbnail_data) }
   end
+    
+  def serve_thumbnail(cgi)
+    @cgi = cgi
+    @from_screenshot = false
+    begin
+      $debug << "<html><body>"
+      $debug << "<pre>"
+      $debug << JSON.pretty_generate(ENV.to_hash)
+      $debug << "</pre><hr><pre>"
+      $debug << JSON.pretty_generate(@cgi.params)
+      $debug << "</pre>"
+      $debug << "<hr>"
+    
+      if @cgi.params.has_key? 'test'
+        test_html = File.open(File.dirname(File.realpath(__FILE__)) + '/test.html').read
+        @cgi.out('Access-Control-Allow-Origin' => '*') {test_html}
+        exit
+      end
+    
+      @root = @cgi.params['root'][0] or raise "Missing 'root' param"
+      @root = @root.sub(/\/$/, '')
+      $debug << "root: #{@root}<br>"
+    
+      @format = @cgi.params['format'][0] || 'jpg'
+    
+      @tile_format = @cgi.params['tileFormat'][0] || 'webm'
+    
+      @nframes = @cgi.params['nframes'][0] || 1
+      @nframes = @nframes.to_i
+    
+      recompute = @cgi.params.has_key? 'recompute'
+    
+      if ENV['QUERY_STRING']
+        # Running in CGI mode;  enable cache
+        cache_path = ENV['QUERY_STRING'].split("cachepath=")[1]
+        cache_file = "#{@cache_dir}#{cache_path}"
+        
+        FileUtils.mkdir_p(File.dirname(cache_file))
+      else
+        # Running from commandline;  don't cache
+        cache_file = nil
+      end
+    
+      ['REMOTE_ADDR', 'HTTP_USER_AGENT', 'HTTP_REFERER'].each {|cgi_param|
+        if ENV[cgi_param]
+          $stats[cgi_param] = ENV[cgi_param]
+        end
+      }
+      
+      $begin_time = Time.now 
+      
+      ###
+      ### Return from cache, if already computed, or wait for cache if being computed in another process
+      ### 
 
-rescue SystemExit
-  # ignore
-rescue Exception => e
-  $stats['FATALERROR'] = "#{e}\n#{e.backtrace.join("\n")}"
-  vlog(0, "CHECKPOINTTHUMBNAIL FATALERROR #{JSON.generate($stats)}")
-  debug.insert 0, "400: Bad Request<br>"
-  debug.insert 2, "<pre>#{e}\n#{e.backtrace.join("\n")}</pre>"
-  debug.insert 3, "<hr>"
-  cgi.out('status' => 'BAD_REQUEST', 'Access-Control-Allow-Origin' => '*') {debug.join('')}
+      # Loop
+      #   If thumbnail is in cache use it, done
+      #   Create and attempt to (non-blocking) acquire lock on <cachepath>.computing
+      #   Acquired? break from loop
+    
+      @from_screenshot = @cgi.params.has_key?('fromScreenshot')
+      image_data = nil
+      compute_path = cache_file + '.compute'
+      compute_file = nil
+    
+      while true
+        if File.exists?(cache_file) and not recompute
+          vlog(0, "Found in cache.")
+          $debug << "Found in cache."
+          image_data = open(cache_file, 'rb') {|i| i.read}
+          break
+        end
+    
+        # If file isn't in cache and we've already locked the compute_file, exit loop and compute
+        if compute_file
+          break
+        end
+        
+        compute_file = File.open(compute_path, 'w')
+        if not compute_file.flock(File::LOCK_NB | File::LOCK_EX)
+          vlog(0, "Cannot lock compute lockfile; waiting for another process to finish computing")
+          sleep(1)
+          compute_file.close
+          compute_file = nil
+        end
+      end
+    
+      if image_data and compute_file
+        compute_file.close
+        compute_file = nil
+        FileUtils.rm_f(compute_path)
+      end
+    
+      ###
+      ### Compute if needed
+      ### 
+
+      if not image_data
+        vlog(0, "Not found in cache; computing")
+        $request_url = ENV['REQUEST_SCHEME'] + '://' + ENV['HTTP_HOST'] + ENV['REQUEST_URI']
+        vlog(0, "STARTTHUMBNAIL #{$request_url}")
+        vlog(0, "CHECKPOINTTHUMBNAIL START #{JSON.generate($stats)}")
+        @tmpfile = "#{@tmp_dir}/#{Process.pid}.#{(Time.now.to_f)}.#{@format}"
+
+        if @from_screenshot
+          thumbnail_worker_hostname = acquire_screenshot_semaphore()
+        end
+
+        if @from_screenshot and thumbnail_worker_hostname != 'localhost'
+          # Writes to @tmpfile
+          delegate_thumbnail(thumbnail_worker_hostname)
+        else
+          # Writes to @tmpfile
+          compute_thumbnail()
+        end
+
+        image_data = open(@tmpfile, 'rb') {|i| i.read}
+        $stats['sizeBytes'] = image_data.size
+        $stats['totalTimeSecs'] = Time.now - $begin_time
+        pt = Process.times
+        $stats['cpuTime'] = pt.utime + pt.stime + pt.cutime + pt.cstime
+        vlog(0, "ENDTHUMBNAIL #{$request_url} #{JSON.generate($stats)}")
+    
+        if cache_file
+          File.rename @tmpfile, cache_file
+          vlog(0, "Moved output file to cache: #{cache_file}")
+        else
+          vlog(0, "Deleted output file");
+          File.unlink @tmpfile
+        end
+    
+        # Cleanup screenshot work
+        if @tmpfile_screenshot_input_path
+          FileUtils.rm_rf(@tmpfile_screenshot_input_path)
+        end
+    
+        #
+        # Done
+        #
+      end
+    
+      $debug_mode = @cgi.params.has_key? '$debug'
+    
+      if $debug_mode
+        $debug << "</body></html>"
+        @cgi.out {$debug.join('')}
+      elsif not cache_file
+        print image_data
+        exit
+      else
+        mime_types = {
+          'gif' => 'image/gif',
+          'jpg' => 'image/jpeg',
+          'json' => 'application/json',
+          'mp4' => 'video/mp4',
+          'webm' => 'video/webm',
+          'png' => 'image/png'
+        }
+        mime_type = mime_types[@format] || 'application/octet-stream'
+        @cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image_data}
+      end
+    
+    rescue SystemExit
+      # ignore
+    rescue Exception => e
+      $stats['FATALERROR'] = "#{e}\n#{e.backtrace.join("\n")}"
+      vlog(0, "CHECKPOINTTHUMBNAIL FATALERROR #{JSON.generate($stats)}")
+      $debug.insert 0, "400: Bad Request<br>"
+      $debug.insert 2, "<pre>#{e}\n#{e.backtrace.join("\n")}</pre>"
+      $debug.insert 3, "<hr>"
+      @cgi.out('status' => 'BAD_REQUEST', 'Access-Control-Allow-Origin' => '*') {$debug.join('')}
+    end
+  end
 end
+
+ThumbnailGenerator.new.serve_thumbnail(cgi)
