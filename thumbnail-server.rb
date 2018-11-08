@@ -100,11 +100,11 @@ class ThumbnailGenerator
   end
 
   def acquire_screenshot_semaphore()
-    if root.include?('voting_ac_us_house_boundaries_2018_chor')
+    if @root.include?('voting_ac_us_house_boundaries_2018_chor')
       vlog(0, "Aborting due to 'voting_ac_us_house_boundaries_2018_chor'")
       exit
     end
-    if root.include?('voting_ac_polling_places')
+    if @root.include?('voting_ac_polling_places')
       vlog(0, "Aborting due to 'voting_ac_polling_places'")
       exit
     end
