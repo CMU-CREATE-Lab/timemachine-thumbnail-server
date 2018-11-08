@@ -174,6 +174,14 @@ begin
     end
     
     if from_screenshot
+      if root.include?('voting_ac_us_house_boundaries_2018_chor')
+        vlog(0, "Aborting due to 'voting_ac_us_house_boundaries_2018_chor'")
+        exit
+      end
+      if root.include?('voting_ac_polling_places')
+        vlog(0, "Aborting due to 'voting_ac_polling_places'")
+        exit
+      end
       if root.include?('allegheny_school')
         vlog(0, "Aborting due to 'allegheny_school'")
         exit
