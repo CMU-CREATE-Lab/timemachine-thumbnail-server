@@ -9,7 +9,7 @@ class FlockSemaphore
     if @lockedFile
       raise "captureNonblock:  already captured"
     end
-    Dir.glob(@dir + '/*').shuffle.each {|candidate|
+    Dir.glob(@dir + '/*').sort.each {|candidate|
       f = File.open(candidate, 'r')
       if f.flock(File::LOCK_NB|File::LOCK_EX)
         @lockedFile = f

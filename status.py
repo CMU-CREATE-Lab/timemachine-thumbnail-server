@@ -54,7 +54,10 @@ for line in lines:
         continue
     if not id in thumbs:
         thumbs[id] = {}
-    thumbs[id][tokens[4]] = line
+    try:
+        thumbs[id][tokens[4]] = line
+    except:
+        continue
     thumbs[id]['last'] = line
     if tokens[4] == 'STARTTHUMBNAIL':
         ids.append(id)
@@ -95,6 +98,9 @@ for id in reversed(ids[-num_thumbnails:]):
         
     print('<h4>Root</h4>\n%s<br>\n' % cgi.escape(queryparams['root'][0]))
         
+    if 'delegatedTo' in stats:
+        print('<h4>Delegated to</h4>\n%s<br>\n' % cgi.escape(stats['delegatedTo']))
+
     if 'ENDTHUMBNAIL' in thumbs[id]:
         if not 'totalTimeSecs' in stats:
             continue
