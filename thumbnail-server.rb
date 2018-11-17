@@ -100,30 +100,6 @@ class ThumbnailGenerator
   end
 
   def acquire_screenshot_semaphore()
-    if @root.include?('voting_ac_us_house_boundaries_2018_chor')
-      vlog(0, "Aborting due to 'voting_ac_us_house_boundaries_2018_chor'")
-      exit
-    end
-    if @root.include?('voting_ac_polling_places')
-      vlog(0, "Aborting due to 'voting_ac_polling_places'")
-      exit
-    end
-    if @root.include?('allegheny_school')
-      vlog(0, "Aborting due to 'allegheny_school'")
-      exit
-    end
-    if @root.include?(',pgh_')
-      vlog(0, "Aborting due to ',pgh_'")
-      exit
-    end
-    if @root.include?('ac_superzips_score')
-      vlog(0, "Aborting due to 'ac_superzips_score'")
-      exit
-    end
-    if @root.include?(',allegheny_county')
-      vlog(0, "Aborting due to ',allegheny_county'")
-      exit
-    end
     @semaphore = FlockSemaphore.new('/t/thumbnails.cmucreatelab.org/locks')
     while true
       lock = @semaphore.captureNonblock
