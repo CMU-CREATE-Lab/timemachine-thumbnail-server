@@ -39,6 +39,8 @@ filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 $ffmpeg_path = '/usr/local/bin/ffmpeg'
 $num_threads = 8
 
+$config = open(File.dirname(File.realpath(__FILE__) + '/config.json')) {|i| JSON.parse(i.read)}
+
 $vlog_logfile = File.open(File.dirname(File.dirname(File.realpath(__FILE__))) + '/log.txt' , 'a')
 $id = "%06d" % rand(1000000) 
 $stats = {}
@@ -100,22 +102,26 @@ class ThumbnailGenerator
   end
 
   def acquire_screenshot_semaphore()
-    @semaphore = FlockSemaphore.new('/t/thumbnails.cmucreatelab.org/locks')
-    while true
-      lock = @semaphore.captureNonblock
-      if lock
-        vlog(0, "Captured resource lock #{lock}")
-        break
-      else
-        vlog(0, "Waiting to capture resource lock in /t/thumbnails.cmucreatelab.org/locks")
+    if $config.lockdir
+      @semaphore = FlockSemaphore.new($config.lockdir)
+      while true
+        lock = @semaphore.captureNonblock
+        if lock
+          vlog(0, "Captured resource lock #{lock} from #{$config.lockdir}")
+          break
+        else
+          vlog(0, "Waiting to capture resource lock in #{$config.lockdir}")
+        end
+        sleep(1)
       end
-      sleep(1)
+      thumbnail_worker_hostname = File.basename(lock).split('.')[2..-1].join('.')
+      vlog(0, "Thumbnail worker #{thumbnail_worker_hostname}")
+      return thumbnail_worker_hostname
+    else
+      @semaphore = nil
+      vlog(0, "No lockdir; skipping semaphore capture")
     end
-    thumbnail_worker_hostname = File.basename(lock).split('.')[2..-1].join('.')
-    vlog(0, "Thumbnail worker #{thumbnail_worker_hostname}")
-    return thumbnail_worker_hostname
-  end
-
+    
 
   def start_thumbnail_from_screenshot()
     
