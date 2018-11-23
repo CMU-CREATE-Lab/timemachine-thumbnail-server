@@ -420,7 +420,9 @@ class ThumbnailGenerator
     rescue Selenium::WebDriver::Error::TimeOutError
       raise "Error taking screenshot. Data failed to load."
     end
-    @semaphore.release
+    if @semaphore
+      @semaphore.release
+    end
   end
 
   def find_tile_for_non_screenshot()
