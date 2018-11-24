@@ -1,18 +1,76 @@
 <html>
 <head>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/URI.js/1.19.1/URI.min.js"></script>
 <style>
 .test {
   display:inline-block;
   margin:10px;
 }
-.test img, .test video {
-  margin:3px;
+</style>
+<script>
+var tests = [
+    {
+	title: 'Coral reefs and bleaching',
+	src: 'https://thumbnails-v2.createlab.org/thumbnail?root=https%3A%2F%2Fheadless.earthtime.org%2F%23v%3D37.96643%2C27.0601%2C0.48%2ClatLng%26t%3D0.75%26ps%3D0%26l%3Dbdrk%2Ccb%26bt%3D0.75%26et%3D0.75%26startDwell%3D0%26endDwell%3D0%26fps%3D10&width=250&height=150&format=png&fps=10&tileFormat=mp4&startDwell=0&endDwell=0&fromScreenshot&baseMapsNoLabels'
+    },
+    {
+	title: 'Coral reefs and bleaching',
+	src: 'https://thumbnails-v2.createlab.org/thumbnail?root=https%3A%2F%2Fheadless.earthtime.org%2F%23v%3D267429%2C611221%2C904411%2C969523%2Cpts%26t%3D0%26ps%3D50%26l%3Dblsat%2Ccb%26bt%3D19950101%26et%3D20051231%26startDwell%3D0%26endDwell%3D0%26fps%3D30&width=250&height=150&format=mp4&fps=30&tileFormat=mp4&startDwell=0&endDwell=0&fromScreenshot&minimalUI'
+    },
+    {
+	title: 'Coral reefs and bleaching',
+	src: 'https://thumbnails-v2.createlab.org/thumbnail?root=https%3A%2F%2Fheadless.earthtime.org%2F%23v%3D267429%2C611221%2C904411%2C969523%2Cpts%26t%3D0%26ps%3D50%26l%3Dbdrk%2Ccb%26bt%3D20000101%26et%3D20051231%26startDwell%3D0%26endDwell%3D0%26fps%3D30&width=250&height=150&format=mp4&fps=30&tileFormat=mp4&startDwell=0&endDwell=0&fromScreenshot&minimalUI'
+    }
+];
+
+function thumbnail_media_type(url) {
+    var fields = url.split('&');
+    if (fields.indexOf('format=png') >= 0 || fields.indexOf('format=jpg') >= 0) {
+	return 'img';
+    } else {
+	return 'video';
+    }
 }
 
-</style>
+function url_prefix(url) {
+    return URI(url).protocol() + '://' + URI(url).hostname();
+}
+
+function url_relative(url) {
+    return URI(url).relativeTo(url_prefix(url)).toString();
+}
+
+function init() {
+    console.log('init');
+    for (var i = 0; i < tests.length; i++) {
+	var test = tests[i];
+	var title = test.title;
+	var node;
+	var media_type = thumbnail_media_type(test.src);
+	
+	$("body").append(`<h2>${i} ${title} (${media_type})</h2>`);
+	var prefixes = [url_prefix(test.src), url_prefix(document.location)];
+	for (var j = 0; j < prefixes.length; j++) {
+	    var src = prefixes[j] + "/" + url_relative(test.src);
+	    if (j == 1) {
+		src += `&testepoch=${new Date().getTime()}`;
+	    }
+	    var host = URI(prefixes[j]).host();
+	    var html = $('body').append(`<div class="test">` +
+					`  <${media_type} src="${src}" autoplay loop muted></${media_type}>` +
+					`<br>${host}</div>`);
+	}
+    }
+}
+    
+$(init);
+</script>
+
 </head>
 <body>
 
+<!--
 <div class="test">
 <video src="thumbnail?root=http://explorables.cmucreatelab.org/environmental-timemachines/shenango-20141005-20141006-tm/&boundsLTRB=2084.88990915391,1273.0414920286516,3791.489909153904,2519.6414920286475&width=320&height=240&frameTime=876.8333333333334&nframes=100&format=mp4&tileFormat=mp4&labels=2014-10-06%2009:30:31&recompute" autoplay="autoplay" loop="loop"></video><br>
 100-frame video of Shenango with static label
@@ -37,6 +95,7 @@ Single-frame PNG of Shenango with static label
 <img src="thumbnail?root=http://earthengine.google.org/timelapse/data/20130507&boundsLTRB=-1070418.6821624064,661176.8681517515,1950212.7967361556,744089.7881861039&width=146&height=101&frameTime=0&recompute"><br>
 World JPG from Earth Timelapse
 </div>
-
+    -->
+    
 </body>
 </html>
