@@ -4,3 +4,5 @@ test/temp-computed
 site.conf
 cache
 config.json
+.ipynb_checkpoints
+tmp
