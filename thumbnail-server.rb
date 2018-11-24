@@ -838,11 +838,18 @@ class ThumbnailGenerator
   end
 
   def delegate_thumbnail(thumbnail_worker_hostname)
-    url = "http://#{thumbnail_worker_hostname}#{ENV['REQUEST_URI']}"
+    url = "https://#{thumbnail_worker_hostname}#{ENV['REQUEST_URI']}"
     $stats['delegatedTo'] = url
     vlog(0, "CHECKPOINTTHUMBNAIL DELEGATION_START #{JSON.generate($stats)}")
     vlog(0, "Delegating thumbnail to #{thumbnail_worker_hostname}")
-    thumbnail_data = Net::HTTP.get(URI(url))
+
+    uri = URI.parse(url)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = true
+    http.read_timeout = 1200
+    thumbnail_data = http.get(URI(url))
+    
+    #thumbnail_data = Net::HTTP.get(URI(url))
     vlog(0, "Thumbnail returned from #{thumbnail_worker_hostname}, length #{thumbnail_data.size}")
     vlog(0, "CHECKPOINTTHUMBNAIL DELEGATION_FINISHED #{JSON.generate($stats)}")
 
