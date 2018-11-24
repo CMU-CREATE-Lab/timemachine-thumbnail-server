@@ -115,7 +115,7 @@ for id in reversed(ids[-num_thumbnails:]):
         if 'recompute' in url:
             print('WARNING, RECOMPUTE TAG, DO NOT FOLLOW THIS LINK: %s<br>' % url)
         elif queryparams['format'][0] == 'mp4':
-            print('<a href="%s"><video src="%s" autoplay=autoplay loop=loop style="max-height:300px"></video><br>link</a>' % (url, url))
+            print('<a href="%s"><video src="%s" autoplay loop muted style="max-height:300px"></video><br>link</a>' % (url, url))
         else:
             print('<a href="%s"><img src="%s" style="max-height:300px"><br>link</a>' % (url, cgi.escape(url)))
     else:
