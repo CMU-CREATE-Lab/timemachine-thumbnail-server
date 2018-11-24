@@ -1,0 +1,104 @@
+# To be included from config file, Apache 2.4
+# Before including, define THUMBROOT to the parent directory of this directory
+
+DocumentRoot /thumbnailworker/thumbnails-rsargent.createlab.org/cache
+Options FollowSymLinks
+Header set Access-Control-Allow-Origin "*"
+<Directory "/thumbnailworker/thumbnails-rsargent.createlab.org">
+  AllowOverride None
+  Options +FollowSymLinks -SymLinksIfOwnerMatch
+  Require all granted
+</Directory>
+RewriteEngine on
+#LogLevel alert rewrite:trace6
+
+# 1-hour timeout
+Timeout 3600
+
+# The cached files do not have a file extension,
+# so we must set the content-type to let the browsers
+# know what they are getting.
+<If "%{THE_REQUEST} =~ /debug/">
+  Header set Content-Type "text/html"
+</If>
+<ElseIf "%{QUERY_STRING} =~ /format=jpg/">
+  Header set Content-Type "image/jpeg"
+  Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
+</ElseIf>
+<ElseIf "%{QUERY_STRING} =~ /format=png/">
+  Header set Content-Type "image/png"
+  Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
+</ElseIf>
+<ElseIf "%{QUERY_STRING} =~ /format=gif/">
+  Header set Content-Type "image/gif"
+  Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
+</ElseIf>
+<ElseIf "%{QUERY_STRING} =~ /format=mp4/">
+  Header set Content-Type "video/mp4"
+  Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
+</ElseIf>
+<ElseIf "%{QUERY_STRING} =~ /format=webm/">
+  Header set Content-Type "video/webm"
+  Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
+</ElseIf>
+
+# Status server
+RewriteRule ^/status$ /thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/status.py [L,END]
+RewriteRule ^/status-staging(\?.*)?$ /thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/status-staging.py$1 [L,END]
+RewriteRule ^/breathecam-videos$ /thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/breathecam-videos.py [L,END]
+
+# Regression testing
+RewriteRule ^/test$ /thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/test.html [L,END]
+
+# Change /thumbnail?cgiparams to /thumbnail/cgiparams
+RewriteRule ^/thumbnail$ /thumbnail/%{QUERY_STRING}
+
+# When we check the cache we need to remove &debug or &recompute from the URI
+RewriteRule ^(.+)&debug(.*)$ $1$2 [N]
+RewriteRule ^(.+)&recompute(.*)$ $1$2 [N]
+
+# URLencode . / : &
+# Note that we use a 0 instead of a % because ffmpeg silently breaks
+# when percent symbols are used in an output path (specifically mjpeg encoder)
+
+RewriteRule ^(.+)\.(.*)$ $1\02E$2 [N]
+RewriteRule ^(.+)//(.*)$ $1/\02F$2 [N]
+RewriteRule ^(.+):(.*)$ $1\03A$2 [N]
+RewriteRule ^(.+)&(.*)$ $1\026$2 [N]
+RewriteRule ^(.+)#(.*)$ $1\023$2 [N]
+RewriteRule ^(.+),(.*)$ $1\02C$2 [N]
+
+RewriteRule ^(.+)%23(.*)$ $1\023$2 [N]
+RewriteRule ^(.+)%26(.*)$ $1\026$2 [N]
+RewriteRule ^(.+)%3D(.*)$ $1\03D$2 [N]
+RewriteRule ^(.+)%2C(.*)$ $1\02C$2 [N]
+
+# Embed / (subdir) every 80 non-/ chars
+RewriteRule ^/(([^\/]{1,80}/)*)([^\/]{80})([^\/].*)$ /$1$3/$4 [N]
+
+# Remove trailing slash if there is one
+RewriteRule ^(.*)/+$ $1 [N]
+
+# If after all this it wasn't really a /thumbnail URL, give a 404 by using a bogus path
+RewriteCond %{SCRIPT_FILENAME} !^\/thumbnail\/
+RewriteRule ^(.*)$ /thisdoesnotexist [L]
+
+#  # When we check the cache we need to remove &debug or &recompute from the URI
+#  RewriteRule ^(.+)026debug(.*)$ $1$2 [N]
+#  RewriteRule ^(.+)026recompute(.*)$ $1$2 [N]
+
+# Check the cache.  If it's not there (or we are debugging/recomputing), run the thumbnail server ruby script, which will fill the cache path next time
+# Otherwise, fall through and serve the cached path
+RewriteCond /thumbnailworker/thumbnails-rsargent.createlab.org/cache$1 !-f [OR]
+RewriteCond %{QUERY_STRING} &debug [OR]
+RewriteCond %{QUERY_STRING} &recompute
+RewriteRule ^(.*)$ /thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/thumbnail-server.rb?cachepath=$1 [L]
+
+<Directory "/thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server">
+  AddHandler cgi-script .rb
+  AddHandler cgi-script .py
+  Options +ExecCGI
+</Directory>
+ScriptAlias /compute_thumbnail "/thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/thumbnail-server.rb"
+
+

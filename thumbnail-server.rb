@@ -1,4 +1,4 @@
-#!/usr/local/bin/ruby
+#!/usr/bin/env ruby
 
 # Next steps:
 # Whitelist for time machine host to mitigate potential ffmpeg security issues
@@ -39,7 +39,12 @@ filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 $ffmpeg_path = '/usr/local/bin/ffmpeg'
 $num_threads = 8
 
-$config = open(File.dirname(File.realpath(__FILE__) + '/config.json')) {|i| JSON.parse(i.read)}
+config_path = File.dirname(File.realpath(__FILE__)) + '/config.json'
+if File.exists? config_path
+  $config = open(config_path) {|i| JSON.parse(i.read)}
+else
+  $config = {}
+end
 
 $vlog_logfile = File.open(File.dirname(File.dirname(File.realpath(__FILE__))) + '/log.txt' , 'a')
 $id = "%06d" % rand(1000000) 
@@ -79,6 +84,10 @@ class ThumbnailGenerator
     options.add_argument('--headless')
     options.add_argument('--hide-scrollbars')
     driver = Selenium::WebDriver.for :chrome, options: options
+    if $config['override_headless']
+      url = url.sub('headless.earthtime.org', $config['override_headless'])
+    end
+    url += '&startPaused=true'
     vlog(shardno, "make_chrome loading #{url}")
     
     # Resize the window to desired width/height.
@@ -102,15 +111,15 @@ class ThumbnailGenerator
   end
 
   def acquire_screenshot_semaphore()
-    if $config.lockdir
-      @semaphore = FlockSemaphore.new($config.lockdir)
+    if $config['lockdir']
+      @semaphore = FlockSemaphore.new($config['lockdir'])
       while true
         lock = @semaphore.captureNonblock
         if lock
-          vlog(0, "Captured resource lock #{lock} from #{$config.lockdir}")
+          vlog(0, "Captured resource lock #{lock} from #{$config['lockdir']}")
           break
         else
-          vlog(0, "Waiting to capture resource lock in #{$config.lockdir}")
+          vlog(0, "Waiting to capture resource lock in #{$config['lockdir']}")
         end
         sleep(1)
       end
@@ -120,8 +129,9 @@ class ThumbnailGenerator
     else
       @semaphore = nil
       vlog(0, "No lockdir; skipping semaphore capture")
+      return 'localhost'
     end
-    
+  end
 
   def start_thumbnail_from_screenshot()
     
@@ -298,7 +308,6 @@ class ThumbnailGenerator
   
   #################################
   
-  
   def capture_frames_from_screenshot()
     begin
       start_frame ||= 0
@@ -360,22 +369,24 @@ class ThumbnailGenerator
                 driver = nil
                 break
               end
-              complete = driver.execute_script(
+              (complete, after_time, before_frameno, frameno) = driver.execute_script(
                 "{" +
                 @extra_css +
+                "var before_frameno = timelapse.frameno;" +
                 "timelapse.setNewView(#{@screenshot_bounds.to_json}, true);" +
                 "timelapse.seek(#{seek_time});" +
                 "canvasLayer.update_();" +
-                "return timelapse.lastFrameCompletelyDrawn && timelapse.frameno;" +
+                "return [timelapse.lastFrameCompletelyDrawn, timelapse.getCurrentTime(), before_frameno, timelapse.frameno];" +
                 "}"
               )
+              vlog(shardno, "complete=#{complete} seek_time=#{seek_time} after_time=#{after_time} before_frameno=#{before_frameno} frameno=#{frameno}")
               if complete
                 driver.save_screenshot("#{@tmpfile_screenshot_input_path}/#{'%04d' % frame}.png")
-                vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms (chrome frame #{complete})");
+                vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms (chrome frame #{frameno})");
                 break
               else
-                vlog(shardno, "frame #{frame} called update but not ready yet");
-                sleep(0.05);
+                vlog(shardno, "frame #{frame} called update but not ready yet (chrome frame #{frameno})")
+                sleep(0.05)
               end
             end
           end
@@ -493,7 +504,6 @@ class ThumbnailGenerator
     @cropX = [@crop.size.x.to_i, @pad_size.x.to_i].min
     @cropY = [@crop.size.y.to_i, @pad_size.y.to_i].min
   end
-
 
   def encode_frames()
     #
@@ -870,7 +880,7 @@ class ThumbnailGenerator
     
       recompute = @cgi.params.has_key? 'recompute'
     
-      if ENV['QUERY_STRING']
+      if ENV['QUERY_STRING'] and not $config['disable_cache']
         # Running in CGI mode;  enable cache
         cache_path = ENV['QUERY_STRING'].split("cachepath=")[1]
         cache_file = "#{@cache_dir}#{cache_path}"
@@ -900,37 +910,40 @@ class ThumbnailGenerator
     
       @from_screenshot = @cgi.params.has_key?('fromScreenshot')
       image_data = nil
-      compute_path = cache_file + '.compute'
-      compute_file = nil
-    
-      while true
-        if File.exists?(cache_file) and not recompute
-          vlog(0, "Found in cache.")
-          $debug << "Found in cache."
-          image_data = open(cache_file, 'rb') {|i| i.read}
-          break
-        end
-    
-        # If file isn't in cache and we've already locked the compute_file, exit loop and compute
-        if compute_file
-          break
+
+      if cache_file
+        compute_path = cache_file + '.compute'
+        compute_file = nil
+        
+        while true
+          if File.exists?(cache_file) and not recompute
+            vlog(0, "Found in cache.")
+            $debug << "Found in cache."
+            image_data = open(cache_file, 'rb') {|i| i.read}
+            break
+          end
+          
+          # If file isn't in cache and we've already locked the compute_file, exit loop and compute
+          if compute_file
+            break
+          end
+          
+          compute_file = File.open(compute_path, 'w')
+          if not compute_file.flock(File::LOCK_NB | File::LOCK_EX)
+            vlog(0, "Cannot lock compute lockfile; waiting for another process to finish computing")
+            sleep(1)
+            compute_file.close
+            compute_file = nil
+          end
         end
         
-        compute_file = File.open(compute_path, 'w')
-        if not compute_file.flock(File::LOCK_NB | File::LOCK_EX)
-          vlog(0, "Cannot lock compute lockfile; waiting for another process to finish computing")
-          sleep(1)
+        if image_data and compute_file
           compute_file.close
           compute_file = nil
+          FileUtils.rm_f(compute_path)
         end
       end
-    
-      if image_data and compute_file
-        compute_file.close
-        compute_file = nil
-        FileUtils.rm_f(compute_path)
-      end
-    
+      
       ###
       ### Compute if needed
       ### 
@@ -984,9 +997,6 @@ class ThumbnailGenerator
       if $debug_mode
         $debug << "</body></html>"
         @cgi.out {$debug.join('')}
-      elsif not cache_file
-        print image_data
-        exit
       else
         mime_types = {
           'gif' => 'image/gif',
@@ -1003,6 +1013,7 @@ class ThumbnailGenerator
     rescue SystemExit
       # ignore
     rescue Exception => e
+      STDERR.puts e.backtrace.join("\n")
       $stats['FATALERROR'] = "#{e}\n#{e.backtrace.join("\n")}"
       vlog(0, "CHECKPOINTTHUMBNAIL FATALERROR #{JSON.generate($stats)}")
       $debug.insert 0, "400: Bad Request<br>"
