@@ -46,6 +46,16 @@ else
   $config = {}
 end
 
+$lockdir = nil
+if $config['lockdir']
+  $lockdir = $config['lockdir']
+else
+  default_lockdir = File.dirname(File.dirname(File.realpath(__FILE__))) + '/locks'
+  if File.exists? default_lockdir
+    $lockdir = default_lockdir
+  end
+end
+
 $vlog_logfile = File.open(File.dirname(File.dirname(File.realpath(__FILE__))) + '/log.txt' , 'a')
 $id = "%06d" % rand(1000000) 
 $stats = {}
@@ -112,19 +122,19 @@ class ThumbnailGenerator
   end
 
   def acquire_screenshot_semaphore()
-    if $config['lockdir']
-      @semaphore = FlockSemaphore.new($config['lockdir'])
+    if $lockdir
+      @semaphore = FlockSemaphore.new($lockdir)
       while true
         lock = @semaphore.captureNonblock
         if lock
-          vlog(0, "Captured resource lock #{lock} from #{$config['lockdir']}")
+          vlog(0, "Captured resource lock #{lock} from #{$lockdir}")
           break
         else
-          vlog(0, "Waiting to capture resource lock in #{$config['lockdir']}")
+          vlog(0, "Waiting to capture resource lock in #{$lockdir}")
         end
         sleep(1)
       end
-      thumbnail_worker_hostname = File.basename(lock).split('.')[2..-1].join('.')
+      thumbnail_worker_hostname = File.basename(lock).split('+')[1]
       vlog(0, "Thumbnail worker #{thumbnail_worker_hostname}")
       return thumbnail_worker_hostname
     else
@@ -840,6 +850,7 @@ class ThumbnailGenerator
 
   def delegate_thumbnail(thumbnail_worker_hostname)
     url = "https://#{thumbnail_worker_hostname}#{ENV['REQUEST_URI']}"
+    url += "&workerepoch=#{(Time.now.to_f * 1000).round}"
     $stats['delegatedTo'] = url
     vlog(0, "CHECKPOINTTHUMBNAIL DELEGATION_START #{JSON.generate($stats)}")
     vlog(0, "Delegating thumbnail to #{thumbnail_worker_hostname}")
@@ -848,7 +859,7 @@ class ThumbnailGenerator
     http = Net::HTTP.new(uri.host, uri.port)
     http.use_ssl = true
     http.read_timeout = 1200
-    thumbnail_data = http.get(URI(url))
+    thumbnail_data = http.get(URI(url)).body
     
     #thumbnail_data = Net::HTTP.get(URI(url))
     vlog(0, "Thumbnail returned from #{thumbnail_worker_hostname}, length #{thumbnail_data.size}")
