@@ -74,8 +74,9 @@ end
 
 class ThumbnailGenerator
   def initialize()
-    @cache_dir = File.dirname(File.realpath(__FILE__)) + '/cache'
-    @tmp_dir = File.dirname(File.realpath(__FILE__)) + '/tmp'
+    # cache and tmp live in the containing directory
+    @cache_dir = File.dirname(File.dirname(File.realpath(__FILE__))) + '/cache'
+    @tmp_dir = File.dirname(File.dirname(File.realpath(__FILE__))) + '/tmp'
   end
 
   def make_chrome(shardno, url)

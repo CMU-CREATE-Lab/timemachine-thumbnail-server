@@ -1,10 +1,10 @@
 # To be included from config file, Apache 2.4
 # Before including, define THUMBROOT to the parent directory of this directory
 
-DocumentRoot /thumbnailworker/thumbnails-rsargent.createlab.org/cache
+DocumentRoot ${THUMBROOT}/cache
 Options FollowSymLinks
 Header set Access-Control-Allow-Origin "*"
-<Directory "/thumbnailworker/thumbnails-rsargent.createlab.org">
+<Directory "${THUMBROOT}">
   AllowOverride None
   Options +FollowSymLinks -SymLinksIfOwnerMatch
   Require all granted
@@ -43,12 +43,12 @@ Timeout 3600
 </ElseIf>
 
 # Status server
-RewriteRule ^/status$ /thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/status.py [L,END]
-RewriteRule ^/status-staging(\?.*)?$ /thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/status-staging.py$1 [L,END]
-RewriteRule ^/breathecam-videos$ /thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/breathecam-videos.py [L,END]
+RewriteRule ^/status$ ${THUMBROOT}/timemachine-thumbnail-server/status.py [L,END]
+RewriteRule ^/status-staging(\?.*)?$ ${THUMBROOT}/timemachine-thumbnail-server/status-staging.py$1 [L,END]
+RewriteRule ^/breathecam-videos$ ${THUMBROOT}/timemachine-thumbnail-server/breathecam-videos.py [L,END]
 
 # Regression testing
-RewriteRule ^/test$ /thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/test.html [L,END]
+RewriteRule ^/test$ ${THUMBROOT}/timemachine-thumbnail-server/test.html [L,END]
 
 # Change /thumbnail?cgiparams to /thumbnail/cgiparams
 RewriteRule ^/thumbnail$ /thumbnail/%{QUERY_STRING}
@@ -89,16 +89,16 @@ RewriteRule ^(.*)$ /thisdoesnotexist [L]
 
 # Check the cache.  If it's not there (or we are debugging/recomputing), run the thumbnail server ruby script, which will fill the cache path next time
 # Otherwise, fall through and serve the cached path
-RewriteCond /thumbnailworker/thumbnails-rsargent.createlab.org/cache$1 !-f [OR]
+RewriteCond ${THUMBROOT}/cache$1 !-f [OR]
 RewriteCond %{QUERY_STRING} &debug [OR]
 RewriteCond %{QUERY_STRING} &recompute
-RewriteRule ^(.*)$ /thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/thumbnail-server.rb?cachepath=$1 [L]
+RewriteRule ^(.*)$ ${THUMBROOT}/timemachine-thumbnail-server/thumbnail-server.rb?cachepath=$1 [L]
 
-<Directory "/thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server">
+<Directory "${THUMBROOT}/timemachine-thumbnail-server">
   AddHandler cgi-script .rb
   AddHandler cgi-script .py
   Options +ExecCGI
 </Directory>
-ScriptAlias /compute_thumbnail "/thumbnailworker/thumbnails-rsargent.createlab.org/timemachine-thumbnail-server/thumbnail-server.rb"
+ScriptAlias /compute_thumbnail "${THUMBROOT}/timemachine-thumbnail-server/thumbnail-server.rb"
 
 
