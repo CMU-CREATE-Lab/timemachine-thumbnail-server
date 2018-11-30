@@ -98,7 +98,7 @@ class ThumbnailGenerator
     if $config['override_headless']
       url = url.sub('headless.earthtime.org', $config['override_headless'])
     end
-    url += '&startPaused=true'
+    url += '&pauseWhenInitialized=true'
     vlog(shardno, "make_chrome loading #{url}")
     
     # Resize the window to desired width/height.
@@ -171,14 +171,16 @@ class ThumbnailGenerator
     @root.scan(/023\w+=/).each do |m|
       @root.gsub!(m, m.gsub("026", "#"))
     end
-    
+
+    # Add the correct delimiter to the end, in preparation for UI type
     @root += @root.include?("#") ? "&" : "#"
     
     screenshot_from_video = @root.include?("blsat")
     vlog(0, "root #{@root}")
     root_url_params = CGI::parse(@root.split('#')[1])
     vlog(0, "root_url_params #{root_url_params}")
-    
+
+    # We've already added a trailing delim, add UI type without a delim
     if @cgi.params.has_key?('minimalUI')
       @root += "minimalUI=true"
     elsif @cgi.params.has_key?('timestampOnlyUI')
@@ -188,9 +190,11 @@ class ThumbnailGenerator
     else
       @root += "disableUI=true"
     end
+
+    # Any new parameters after this point need a "&" delimeter
     
     if @cgi.params.has_key?('baseMapsNoLabels')
-      @root += 'baseMapsNoLabels=true'
+      @root += '&baseMapsNoLabels=true'
     end
   
     @output_width = @cgi.params['width'][0].to_i || 128
@@ -224,6 +228,7 @@ class ThumbnailGenerator
     end
     vlog(0, "screenshot_bounds #{@screenshot_bounds}")
     
+    $stats['headless_root'] = @root
     driver = make_chrome(0, @root)
     @first_driver = driver
     vlog(0, "CHECKPOINTTHUMBNAIL CHROMERUNNING #{JSON.generate($stats)}")
