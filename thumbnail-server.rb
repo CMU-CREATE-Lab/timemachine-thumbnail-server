@@ -321,7 +321,6 @@ class ThumbnailGenerator
   
   def capture_frames_from_screenshot()
     begin
-      start_frame ||= 0
       total_chrome_frames = 0
       
       @tmpfile_screenshot_input_path = "#{@tmp_dir}/screenshots.#{Process.pid}.#{(Time.now.to_f)}"
@@ -695,11 +694,11 @@ class ThumbnailGenerator
     post_process_filters = ""
 
     # Dwell time filter
-    post_process_filters += "loop=#{num_start_loop_frames}:1:#{start_loop_frame},setpts=N/FRAME_RATE/TB," if start_dwell_in_sec > 0 and (@format == 'gif' or is_video)
-    post_process_filters += "loop=#{num_end_loop_frames}:1:#{end_loop_frame},setpts=N/FRAME_RATE/TB," if end_dwell_in_sec > 0 and (@format == 'gif' or is_video)
+    post_process_filters += "loop=#{num_start_loop_frames}:1:#{start_loop_frame},setpts=N/FRAME_RATE/TB," if start_dwell_in_sec > 0 and (@format == 'gif' or @is_video)
+    post_process_filters += "loop=#{num_end_loop_frames}:1:#{end_loop_frame},setpts=N/FRAME_RATE/TB," if end_dwell_in_sec > 0 and (@format == 'gif' or @is_video)
 
     # 'Fader shader' filter
-    post_process_filters += "minterpolate='mi_mode=mci:mc_mode=aobmc:vsbmc=1:fps=60'," if interpolate_frames and (@format == 'gif' or is_video)
+    post_process_filters += "minterpolate='mi_mode=mci:mc_mode=aobmc:vsbmc=1:fps=60'," if interpolate_frames and (@format == 'gif' or @is_video)
 
     post_process_filters.chomp!(',')
     unless post_process_filters.empty?
@@ -809,14 +808,12 @@ class ThumbnailGenerator
       @time += @leader_seconds
     end
     
-    tmpfile_root_path = File.dirname(@tmpfile)
-    
     @is_image = true
-    is_video = (@format == 'mp4' or @format == 'webm') ? true : false
+    @is_video = (@format == 'mp4' or @format == 'webm') ? true : false
     
     @raw_formats = ['rgb24', 'gray8']
     
-    if @raw_formats.include? @format or @format == 'gif' or is_video
+    if @raw_formats.include? @format or @format == 'gif' or @is_video
       @is_image = false
     end
     
@@ -828,7 +825,7 @@ class ThumbnailGenerator
     @desired_fps = @dataset_fps
     if @cgi.params.has_key? 'fps'
       @desired_fps = @cgi.params['fps'][0].to_f
-      if is_video
+      if @is_video
         raise "Output fps is required and must be greater than 0" unless @desired_fps
         @video_output_fps = "-r #{@desired_fps}"
       end
