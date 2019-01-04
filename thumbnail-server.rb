@@ -333,9 +333,14 @@ class ThumbnailGenerator
       
       screenshot_playback_rate = (100.0 / @screenshot_playback_speed)
       video_duration_in_secs = (@screenshot_end_time_as_render_time - @screenshot_begin_time_as_render_time) /  (@viewer_max_playback_rate / screenshot_playback_rate)
-      @nframes = @is_image ? 1 : (video_duration_in_secs * @desired_fps).ceil
+      vlog(0, "video_duration_in_secs #{video_duration_in_secs}")
+      vlog(0, "@screenshot_begin_time_as_render_time #{@screenshot_begin_time_as_render_time} @screenshot_end_time_as_render_time #{@screenshot_end_time_as_render_time}")
+      vlog(0, "@viewer_max_playback_rate #{@viewer_max_playback_rate} screenshot_playback_rate #{screenshot_playback_rate}")
       
-      if @nframes < 0
+      @nframes = @is_image ? 1 : (video_duration_in_secs * @desired_fps).ceil
+      vlog(0, "@nframes #{@nframes} @desired_fps #{@desired_fps}")
+      
+      if @nframes < 1
         @nframes = 1
       end
       
