@@ -28,6 +28,7 @@ require 'bigdecimal'
 require 'bigdecimal/util'
 require 'net/http'
 require 'selenium-webdriver'
+require 'rack'
 
 load File.dirname(File.realpath(__FILE__)) + '/mercator.rb'
 load File.dirname(File.realpath(__FILE__)) + '/point.rb'
@@ -1033,7 +1034,16 @@ class ThumbnailGenerator
           'png' => 'image/png'
         }
         mime_type = mime_types[@format] || 'application/octet-stream'
-        @cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image_data}
+
+        if (ENV['HTTP_RANGE'])
+          size = File.size(cache_file)
+          bytes = Rack::Utils.get_byte_ranges(ENV['HTTP_RANGE'], size)[0]
+          offset = bytes.begin
+          length = (bytes.end - bytes.begin) + 1
+          @cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*', 'Accept-Ranges' => 'bytes', 'Content-Range' => "bytes #{bytes.begin}-#{bytes.end}/#{size}", 'Content-Length' => length, 'status' => "206") {image_data}
+        else
+          @cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image_data}
+        end
       end
     
     rescue SystemExit
