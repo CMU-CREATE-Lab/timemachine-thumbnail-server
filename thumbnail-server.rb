@@ -867,13 +867,21 @@ class ThumbnailGenerator
     http = Net::HTTP.new(uri.host, uri.port)
     http.use_ssl = true
     http.read_timeout = 1200
-    thumbnail_data = http.get(URI(url)).body
+    response = http.get(URI(url))
     
-    #thumbnail_data = Net::HTTP.get(URI(url))
-    vlog(0, "Thumbnail returned from #{thumbnail_worker_hostname}, length #{thumbnail_data.size}")
+    vlog(0, "Thumbnail returned from #{thumbnail_worker_hostname}, status code #{response.code}, body length #{response.body.size}")
     vlog(0, "CHECKPOINTTHUMBNAIL DELEGATION_FINISHED #{JSON.generate($stats)}")
-
-    File.open(@tmpfile, 'w') { |file| file.write(thumbnail_data) }
+    if response.code == "200"
+      File.open(@tmpfile, 'w') { |file| file.write(response.body) }
+    else
+      exception_text = "Thumbnail delegation to #{thumbnail_worker_hostname} failed with status code #{response.code} and "
+      if response.body.ascii_only?
+        exception_text += "response body #{response.body}"
+      else
+        exception_text += "non-ascii response body of length #{response.body.length}"
+      end
+      raise exception_text
+    end
   end
     
   def serve_thumbnail(cgi)
