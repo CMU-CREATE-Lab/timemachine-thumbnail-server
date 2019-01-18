@@ -347,7 +347,7 @@ class ThumbnailGenerator
       
       vlog(0, "Need to compute #{@nframes} frames")
       
-      if @nframes > 5500
+      if @nframes > 10000
         vlog(0, "Too many frames to compute #{@nframes}")
         raise "Too many frames to compute #{@nframes}"
       end
