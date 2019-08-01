@@ -187,6 +187,8 @@ class ThumbnailGenerator
     elsif @cgi.params.has_key?('timestampOnlyUI')
       @root += "timestampOnlyUI=true"
       @root += '&timestampOnlyUICentered=true'
+    elsif @cgi.params.has_key?('timestampOnlyUILeft')
+      @root += "timestampOnlyUILeft=true"
     else
       @root += "disableUI=true"
     end
