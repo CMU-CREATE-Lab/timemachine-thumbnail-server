@@ -58,7 +58,7 @@ else
 end
 
 $vlog_logfile = File.open(File.dirname(File.dirname(File.realpath(__FILE__))) + '/log.txt' , 'a')
-$id = "%06d" % rand(1000000) 
+$id = "%06d" % rand(1000000)
 $stats = {}
 
 def vlog(shardno, msg)
@@ -101,23 +101,23 @@ class ThumbnailGenerator
     end
     url += '&pauseWhenInitialized=true'
     vlog(shardno, "make_chrome loading #{url}")
-    
+
     # Resize the window to desired width/height.
     driver.manage.window.resize_to(@output_width, @output_height)
-  
+
     # Navigate to the page; will block until the load is complete.
     # Note: Any ajax requests or large data files may not be loaded yet.
     #       We take care of that further down when taking the actual screenshots.
     driver.navigate.to url
     vlog(shardno, "make_chrome: #{driver.execute_script('{canvasLayer.setAnimate(false); return timelapse.frameno}')} frames before setAnimate(false)");
-    
+
     # Just in case
     sleep(2)
-    
+
     driver.execute_script("timelapse.setNewView(#{@screenshot_bounds.to_json}, true);" + @extra_css)
     ## Just in case
     #sleep(1)
-    
+
     vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
     return driver
   end
@@ -146,10 +146,10 @@ class ThumbnailGenerator
   end
 
   def start_thumbnail_from_screenshot()
-    
+
     Selenium::WebDriver.logger.output = STDERR
     #Selenium::WebDriver.logger.level = :info
-    
+
     def queue_pop_nonblock(queue)
       begin
         return queue.pop(non_block=true)
@@ -157,9 +157,9 @@ class ThumbnailGenerator
         return nil
       end
     end
-    
+
     @extra_css = "";
-    
+
     # Convert URL encoded characters back to their original values
     @root.gsub!("03D", "=")
     @root.gsub!("02C", ",")
@@ -175,7 +175,7 @@ class ThumbnailGenerator
 
     # Add the correct delimiter to the end, in preparation for UI type
     @root += @root.include?("#") ? "&" : "#"
-    
+
     screenshot_from_video = @root.include?("blsat")
     vlog(0, "root #{@root}")
     root_url_params = CGI::parse(@root.split('#')[1])
@@ -186,25 +186,28 @@ class ThumbnailGenerator
       @root += "minimalUI=true"
     elsif @cgi.params.has_key?('timestampOnlyUI')
       @root += "timestampOnlyUI=true"
-      @extra_css = "$('.captureTime.minimalUIMode').css('transform', 'translate(-50%,0)').css('left', '50%');"
-    #extra_css = "$('.captureTime.minimalUIMode').css('left', '50%');"
+      @root += '&timestampOnlyUICentered=true'
     else
       @root += "disableUI=true"
     end
 
     # Any new parameters after this point need a "&" delimeter
-    
+
     if @cgi.params.has_key?('baseMapsNoLabels')
       @root += '&baseMapsNoLabels=true'
     end
-  
+
+    if @cgi.params.has_key?('centerLegend')
+      @root += '&centerLegend=true'
+    end
+
     @output_width = @cgi.params['width'][0].to_i || 128
     @output_height = @cgi.params['height'][0].to_i || 74
-    
+
     #
     # Parse bounds
     #
-    
+
     @screenshot_bounds = {}
     if @boundsFromSharelink
       view = root_url_params['v'][0].split(',')
@@ -228,138 +231,138 @@ class ThumbnailGenerator
       @screenshot_bounds['bbox']['ymax'] = @boundsLTRB[3]
     end
     vlog(0, "screenshot_bounds #{@screenshot_bounds}")
-    
+
     $stats['headless_root'] = @root
     driver = make_chrome(0, @root)
     @first_driver = driver
     vlog(0, "CHECKPOINTTHUMBNAIL CHROMERUNNING #{JSON.generate($stats)}")
-    
+
     # 0 - 100.  If ps is missing or set to zero, override to 50
     @screenshot_playback_speed = root_url_params.has_key?('ps') ? root_url_params['ps'][0].to_f : 50.0
     if @screenshot_playback_speed < 1e-10
       @screenshot_playback_speed = 50.0
     end
-    
+
     # YYYYMMDD
     screenshot_begin_time_as_date = root_url_params.has_key?('bt') ? root_url_params['bt'][0] : 0.0
     # YYYYMMDD
     screenshot_end_time_as_date = root_url_params.has_key?('et') ? root_url_params['et'][0] : driver.execute_script("return timelapse.getDuration();").to_d.truncate(1).to_f
-    
+
     $debug << "screenshot_playback_speed: #{@screenshot_playback_speed}<br>"
     $debug << "screenshot_begin_time_as_date #{screenshot_begin_time_as_date}<br>"
     $debug << "screenshot_end_time_as_date #{screenshot_end_time_as_date}<br>"
-    
+
     @screenshot_begin_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_begin_time_as_date}')").to_f
     @screenshot_end_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_end_time_as_date}')").to_f
-  
-    
+
+
     $debug << "screenshot_begin_time_as_render_time: #{@screenshot_begin_time_as_render_time}<br>"
     $debug << "screenshot_end_time_as_render_time: #{@screenshot_end_time_as_render_time}<br>"
-    
+
     @dataset_num_frames = driver.execute_script("return timelapse.getNumFrames();").to_f
     @dataset_fps = driver.execute_script("return timelapse.getFps();").to_f
     @viewer_max_playback_rate = driver.execute_script("return timelapse.getMaxPlaybackRate();").to_f
-    
+
     $debug << "viewer_max_playback_rate: #{@viewer_max_playback_rate}<br>"
   end
-  
+
   #########################
-  
-  
+
+
   def start_thumbnail_not_screenshot()
     #
     # Fetch tm.json
     #
-    
+
     tm_url = "#{@root}/tm.json"
     $debug << "tm_url: #{tm_url}<br>"
     @tm = open(tm_url) {|i| JSON.parse(i.read)}
     $debug << JSON.dump(@tm)
     $debug << "<hr>"
-    
+
     # Use first dataset if there are multiple
     @dataset = @tm['datasets'][0]
-    
+
     #
     # Fetch r.json
     #
-    
+
     r_url = "#{@root}/#{@dataset['id']}/r.json"
     $debug << "r_url: #{r_url}<br>"
     @r = open(r_url) {|i| JSON.parse(i.read)}
     $debug << JSON.dump(@r)
     $debug << "<br>"
-    
+
     @dataset_num_frames = @r['frames'].to_f
     @dataset_fps = @r['fps'].to_f
     @nframes = [@nframes, @dataset_num_frames].min
-    
+
     #
     # Parse bounds
     #
-    
+
     timemachine_width = @r['width']
     timemachine_height = @r['height']
     $debug << "timemachine dims: #{timemachine_width} x #{timemachine_height}<br>"
-    
+
     if @boundsNWSE
       projection_bounds = @tm['projection-bounds'] or raise "boundsNWSE were specified, but #{tm_url} is missing projection-bounds"
-      
+
       projection = MercatorProjection.new(projection_bounds, timemachine_width, timemachine_height)
       $debug << "projection-bounds: #{JSON.dump(projection_bounds)}<br>"
-      
+
       $debug << "boundsNWSE: #{@boundsNWSE.join(', ')}<br>"
       ne = projection.latlngToPoint({'lat' => @boundsNWSE[0], 'lng' => @boundsNWSE[1]})
       sw = projection.latlngToPoint({'lat' => @boundsNWSE[2], 'lng' => @boundsNWSE[3]})
-      
+
       @bounds = Bounds.new(Point.new(ne['x'], ne['y']), Point.new(sw['x'], sw['y']))
-      
+
     else
       @bounds = Bounds.new(Point.new(@boundsLTRB[0], @boundsLTRB[1]),
                           Point.new(@boundsLTRB[2], @boundsLTRB[3]))
     end
-    
+
     @input_aspect_ratio = @bounds.size.x.to_f / @bounds.size.y
     $debug << "bounds: #{@bounds}<br>"
   end
-  
+
   #################################
-  
+
   def capture_frames_from_screenshot()
     begin
       total_chrome_frames = 0
-      
+
       @tmpfile_screenshot_input_path = "#{@tmp_dir}/screenshots.#{Process.pid}.#{(Time.now.to_f)}"
       FileUtils.mkdir_p(@tmpfile_screenshot_input_path) unless File.exists?(@tmpfile_screenshot_input_path)
-      
+
       screenshot_playback_rate = (100.0 / @screenshot_playback_speed)
       video_duration_in_secs = (@screenshot_end_time_as_render_time - @screenshot_begin_time_as_render_time) /  (@viewer_max_playback_rate / screenshot_playback_rate)
       vlog(0, "video_duration_in_secs #{video_duration_in_secs}")
       vlog(0, "@screenshot_begin_time_as_render_time #{@screenshot_begin_time_as_render_time} @screenshot_end_time_as_render_time #{@screenshot_end_time_as_render_time}")
       vlog(0, "@viewer_max_playback_rate #{@viewer_max_playback_rate} screenshot_playback_rate #{screenshot_playback_rate}")
-      
+
       @nframes = @is_image ? 1 : (video_duration_in_secs * @desired_fps).ceil
       vlog(0, "@nframes #{@nframes} @desired_fps #{@desired_fps}")
-      
+
       if @nframes < 1
         @nframes = 1
       end
-      
+
       vlog(0, "Need to compute #{@nframes} frames")
-      
+
       if @nframes > 10000
         vlog(0, "Too many frames to compute #{@nframes}")
         raise "Too many frames to compute #{@nframes}"
       end
-      
+
       frame_queue = Queue.new
       (0 ... @nframes).each { |i| frame_queue << i }
-      
+
       # Capture frames from ... to-1
       new_capture_frames_thread = ->(shardno, driver) {
         return Thread.new {
           vlog(shardno, "Shard starting");
-          
+
           while true do
             frame = queue_pop_nonblock(frame_queue)
             if frame == nil
@@ -376,10 +379,10 @@ class ThumbnailGenerator
             seek_time = (frame.to_f / [1.0, (@nframes.to_f - 1.0)].max) * (@screenshot_end_time_as_render_time - @screenshot_begin_time_as_render_time) + @screenshot_begin_time_as_render_time
             $debug << "frame #{frame} seeking to: #{seek_time}<br>"
             vlog(shardno, "frame #{frame} seeking to: #{seek_time}")
-            
+
             before = Time.now
             driver.execute_script("timelapse.seek(#{seek_time});")
-            
+
             while true do
               # Wait at most 30 seconds until we assume things are drawn
               if (Time.now - before) > 30
@@ -418,7 +421,7 @@ class ThumbnailGenerator
           end
         }
       }
-      
+
       nshards = (@nframes / 5).floor
       if nshards < 1
         nshards = 1
@@ -426,11 +429,11 @@ class ThumbnailGenerator
       if nshards > 6
         nshards = 6
       end
-      
+
       $stats['nshards'] = nshards
-      
+
       shard_threads = []
-      
+
       (0 ... nshards).each do |shardno|
         if shardno == 0
           # Reuse the first driver
@@ -440,11 +443,11 @@ class ThumbnailGenerator
         end
         shard_threads << new_capture_frames_thread.call(shardno, thread_driver)
       end
-      
+
       shard_threads.each { |shard_thread| shard_thread.join }
-      
+
       vlog(0, "Chrome rendered a total of #{total_chrome_frames} frames, for #{@nframes} frames needed (#{"%.1f" % (@nframes * 100.0 / total_chrome_frames)}%)")
-      
+
       $stats['chromeRenderTimeSecs'] = Time.now - $begin_time
       $stats['videoFrameCount'] = @nframes
       $stats['frameEfficiency'] = @nframes.to_f / total_chrome_frames
@@ -461,50 +464,50 @@ class ThumbnailGenerator
     #
     # Search for tile from the tile tree
     #
-    
+
     @tile_url = @crop = nil
-    
+
     output_subsample = [@bounds.size.x / @output_width, @bounds.size.y / @output_height].max
-    
+
     $debug << "output_subsample: #{output_subsample}<br>"
-    
+
     # ffmpeg refuses to subsample more than this?
     maximum_ffmpeg_subsample = 64
-    
+
     tile_spacing = Point.new(@r['tile_width'], @r['tile_height'])
     video_size = Point.new(@r['video_width'], @r['video_height'])
-    
+
     # Start from highest level (most detailed) and "zoom out" until a tile is found
     # to completely cover the requested area
     @r['nlevels'].times do |i|
       subsample = 1 << i
       tile_coord = (@bounds.min / subsample / tile_spacing).floor
       level = @r['nlevels'] - i - 1
-      
+
       # Reject level if it would require subsampling more than ffmpeg allows
       required_subsample = output_subsample / subsample
       if required_subsample > maximum_ffmpeg_subsample
         $debug << "level #{level} would have required tile to be subsampled by #{required_subsample}, rejecting<br>"
         next
       end
-      
+
       tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
                                (tile_coord * tile_spacing + video_size) * subsample)
-      
+
       @tile_url = "#{@root}/#{@dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{@tile_format}"
       $debug << "subsample #{subsample}, tile #{tile_bounds} #{@tile_url} contains #{@bounds}? #{tile_bounds.contains @bounds}<br>"
       if tile_bounds.contains @bounds or level == 0
         $debug << "Best tile: #{tile_coord}, level: #{level} (subsample: #{subsample})<br>"
-        
+
         tile_coord.x = [tile_coord.x, 0].max
         tile_coord.y = [tile_coord.y, 0].max
         tile_coord.x = [tile_coord.x, @r['level_info'][level]['cols'] - 1].min
         tile_coord.y = [tile_coord.y, @r['level_info'][level]['rows'] - 1].min
-        
+
         tile_bounds = Bounds.new(tile_coord * tile_spacing * subsample,
                                  (tile_coord * tile_spacing + video_size) * subsample)
         @tile_url = "#{@root}/#{@dataset['id']}/#{level}/#{tile_coord.y}/#{tile_coord.x}.#{@tile_format}"
-        
+
         @crop = (@bounds - tile_bounds.min) / subsample
         $debug << "Tile url: #{@tile_url}<br>"
         $debug << "Tile crop: #{@crop}<br>"
@@ -512,7 +515,7 @@ class ThumbnailGenerator
       end
     end
     @crop or raise "Didn't find containing tile"
-    
+
     # ffmpeg ignores negative crop bounds.  So if we have a negative crop bound,
     # pad the upper left and offset the crop
     @pad_size = video_size
@@ -520,7 +523,7 @@ class ThumbnailGenerator
                        [0, -(@crop.min.y.floor)].max)
     @crop = @crop + @pad_tl
     @pad_size = @pad_size + @pad_tl
-    
+
     # Clamp to max size of the padded area
     @cropX = [@crop.size.x.to_i, @pad_size.x.to_i].min
     @cropY = [@crop.size.y.to_i, @pad_size.y.to_i].min
@@ -627,7 +630,7 @@ class ThumbnailGenerator
     if @is_image && @nframes != 1 && !collapse
       raise "nframes must be omitted or set to 1 when outputting an image"
     end
-    
+
     #
     # Insert filter, if any
     #
@@ -742,24 +745,24 @@ class ThumbnailGenerator
         raise "Both boundsNWSE and boundsLTRB were specified;  please specify only one"
       end
     end
-    
+
     if @from_screenshot
       start_thumbnail_from_screenshot()
     else
       start_thumbnail_not_screenshot()
     end
-    
+
     #
     # Requested output size
     #
-    
+
     @output_width = @cgi.params['width'][0]
     @output_width &&= @output_width.to_i
     @output_height = @cgi.params['height'][0]
     @output_height &&= @output_height.to_i
-    
+
     ignore_aspect_ratio = @cgi.params.has_key? 'ignoreAspectRatio'
-    
+
     if !@output_width && !@output_height
       raise "Must specify at least one of 'width' and 'height'"
     elsif @output_width && @output_height
@@ -783,20 +786,20 @@ class ThumbnailGenerator
     else
       @output_width = (@output_height * @input_aspect_ratio).round
     end
-    
+
     # Min width/height allowed by ffmpeg is 46x46
     @output_width = [@output_width, 46].max
     @output_height = [@output_height, 46].max
-    
+
     # Ensure that the width and height are multiples of 2 for ffmpeg
     @output_width = ((@output_width - 1) / 2 + 1) * 2
     @output_height = ((@output_height - 1) / 2 + 1) * 2
-    
+
     $debug << "output size: #{@output_width}px x #{@output_height}px<br>"
-    
+
     frame_time = @cgi.params['frameTime'][0].to_f
     start_frame = @cgi.params['startFrame'][0]
-    
+
     # If both frameTime and startFrame are passed in, startFrame takes precedence.
     dataset_frame_length = (@dataset_num_frames / @dataset_fps) / @dataset_num_frames
     if start_frame
@@ -805,12 +808,12 @@ class ThumbnailGenerator
     else
       start_frame = (frame_time / dataset_frame_length).floor
     end
-    
+
     max_time = (@dataset_num_frames - 0.25).to_f / @dataset_fps
     @time = [0, [max_time, frame_time.to_f].min].max
-    
+
     $debug << "Time to seek to: #{@time}<br>"
-    
+
     @leader_seconds = 0
     if @r and @r.has_key?('leader')
       # FIXME: fractional leaders...
@@ -818,16 +821,16 @@ class ThumbnailGenerator
       $debug << "Adding #{@leader_seconds} seconds of leader<br>"
       @time += @leader_seconds
     end
-    
+
     @is_image = true
     @is_video = (@format == 'mp4' or @format == 'webm') ? true : false
-    
+
     @raw_formats = ['rgb24', 'gray8']
-    
+
     if @raw_formats.include? @format or @format == 'gif' or @is_video
       @is_image = false
     end
-    
+
     #
     # Fps for video output
     #
@@ -841,7 +844,7 @@ class ThumbnailGenerator
         @video_output_fps = "-r #{@desired_fps}"
       end
     end
-    
+
 
     #
     # Take a screenshot of a page passed in as the root
@@ -868,7 +871,7 @@ class ThumbnailGenerator
     http.use_ssl = true
     http.read_timeout = 1200
     response = http.get(URI(url))
-    
+
     vlog(0, "Thumbnail returned from #{thumbnail_worker_hostname}, status code #{response.code}, body length #{response.body.size}")
     vlog(0, "CHECKPOINTTHUMBNAIL DELEGATION_FINISHED #{JSON.generate($stats)}")
     if response.code == "200"
@@ -883,7 +886,7 @@ class ThumbnailGenerator
       raise exception_text
     end
   end
-    
+
   def serve_thumbnail(cgi)
     @cgi = cgi
     @from_screenshot = false
@@ -895,61 +898,61 @@ class ThumbnailGenerator
       $debug << JSON.pretty_generate(@cgi.params)
       $debug << "</pre>"
       $debug << "<hr>"
-    
+
       if @cgi.params.has_key? 'test'
         test_html = File.open(File.dirname(File.realpath(__FILE__)) + '/test.html').read
         @cgi.out('Access-Control-Allow-Origin' => '*') {test_html}
         exit
       end
-    
+
       @root = @cgi.params['root'][0] or raise "Missing 'root' param"
       @root = @root.sub(/\/$/, '')
       $debug << "root: #{@root}<br>"
-    
+
       @format = @cgi.params['format'][0] || 'jpg'
-    
+
       @tile_format = @cgi.params['tileFormat'][0] || 'webm'
-    
+
       @nframes = @cgi.params['nframes'][0] || 1
       @nframes = @nframes.to_i
-    
+
       recompute = @cgi.params.has_key? 'recompute'
-    
+
       if ENV['QUERY_STRING'] and not $config['disable_cache']
         # Running in CGI mode;  enable cache
         cache_path = ENV['QUERY_STRING'].split("cachepath=")[1]
         cache_file = "#{@cache_dir}#{cache_path}"
-        
+
         FileUtils.mkdir_p(File.dirname(cache_file))
       else
         # Running from commandline;  don't cache
         cache_file = nil
       end
-    
+
       ['REMOTE_ADDR', 'HTTP_USER_AGENT', 'HTTP_REFERER'].each {|cgi_param|
         if ENV[cgi_param]
           $stats[cgi_param] = ENV[cgi_param]
         end
       }
-      
-      $begin_time = Time.now 
-      
+
+      $begin_time = Time.now
+
       ###
       ### Return from cache, if already computed, or wait for cache if being computed in another process
-      ### 
+      ###
 
       # Loop
       #   If thumbnail is in cache use it, done
       #   Create and attempt to (non-blocking) acquire lock on <cachepath>.computing
       #   Acquired? break from loop
-    
+
       @from_screenshot = @cgi.params.has_key?('fromScreenshot')
       image_data = nil
 
       if cache_file
         compute_path = cache_file + '.compute'
         compute_file = nil
-        
+
         while true
           if File.exists?(cache_file) and not recompute
             vlog(0, "Found in cache.")
@@ -957,12 +960,12 @@ class ThumbnailGenerator
             image_data = open(cache_file, 'rb') {|i| i.read}
             break
           end
-          
+
           # If file isn't in cache and we've already locked the compute_file, exit loop and compute
           if compute_file
             break
           end
-          
+
           compute_file = File.open(compute_path, 'w')
           if not compute_file.flock(File::LOCK_NB | File::LOCK_EX)
             vlog(0, "Cannot lock compute lockfile; waiting for another process to finish computing")
@@ -971,17 +974,17 @@ class ThumbnailGenerator
             compute_file = nil
           end
         end
-        
+
         if image_data and compute_file
           compute_file.close
           compute_file = nil
           FileUtils.rm_f(compute_path)
         end
       end
-      
+
       ###
       ### Compute if needed
-      ### 
+      ###
 
       if not image_data
         vlog(0, "Not found in cache; computing")
@@ -1008,7 +1011,7 @@ class ThumbnailGenerator
         pt = Process.times
         $stats['cpuTime'] = pt.utime + pt.stime + pt.cutime + pt.cstime
         vlog(0, "ENDTHUMBNAIL #{$request_url} #{JSON.generate($stats)}")
-    
+
         if cache_file
           File.rename @tmpfile, cache_file
           vlog(0, "Moved output file to cache: #{cache_file}")
@@ -1016,19 +1019,19 @@ class ThumbnailGenerator
           vlog(0, "Deleted output file");
           File.unlink @tmpfile
         end
-    
+
         # Cleanup screenshot work
         if @tmpfile_screenshot_input_path
           FileUtils.rm_rf(@tmpfile_screenshot_input_path)
         end
-    
+
         #
         # Done
         #
       end
-    
+
       $debug_mode = @cgi.params.has_key? '$debug'
-    
+
       if $debug_mode
         $debug << "</body></html>"
         @cgi.out {$debug.join('')}
@@ -1053,7 +1056,7 @@ class ThumbnailGenerator
           @cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image_data}
         end
       end
-    
+
     rescue SystemExit
       # ignore
     rescue Exception => e
