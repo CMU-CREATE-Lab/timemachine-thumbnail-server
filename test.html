@@ -29,15 +29,23 @@ var tests = [
     {
         title: 'Africa Landsat for Mobile Story (timestampOnlyUI)',
         src: 'https://thumbnails-v2.createlab.org/thumbnail?root=https://headless.earthtime.org/%23v%3D935046%2C711459%2C1404483%2C975517%2Cpts%26t%3D0%26ps%3D50%26l%3Dblsat%26bt%3D20100101%26et%3D20161231%26startDwell%3D0%26endDwell%3D1%26fps%3D30&width=640&height=360&format=mp4&fps=30&tileFormat=mp4&startDwell=0&endDwell=1&fromScreenshot&timestampOnlyUI=true'
-},
-{
-title: 'Single frame fires with date and legend (minimalUI)',
-src: 'https://thumbnails-earthtime.cmucreatelab.org/thumbnail?root=https%3A%2F%2Fheadless.earthtime.org%2F%23v%3D66511%2C260997%2C2059082%2C1381818%2Cpts%26t%3D18.1%26ps%3D0%26l%3Dblsat%2Cviirs%26bt%3D18.1%26et%3D18.1%26startDwell%3D0%26endDwell%3D0%26fps%3D30&width=1280&height=720&format=png&fps=30&tileFormat=mp4&startDwell=0&endDwell=0&fromScreenshot&minimalUI'
-},
-{
-title: 'TSIP single frame (timestampOnlyUI)',
-src: 'https://thumbnails-v2.createlab.org/thumbnail?root=https://headless.earthtime.org/%23v%3D4.56342%2C0%2C1.01%2ClatLng%26ps%3D50%26l%3Dbdrk%2Cpure_earth_tsip_by_pollutants_top_7%26bt%3D20160101%26et%3D20161231%26startDwell%3D0%26endDwell%3D0&width=1280&height=720&format=mp4&fps=30&tileFormat=mp4&startDwell=0&endDwell=0&fromScreenshot&timestampOnlyUI=true'
-}
+    },
+    {
+        title: 'Single frame fires with date and legend (minimalUI)',
+        src: 'https://thumbnails-earthtime.cmucreatelab.org/thumbnail?root=https%3A%2F%2Fheadless.earthtime.org%2F%23v%3D66511%2C260997%2C2059082%2C1381818%2Cpts%26t%3D18.1%26ps%3D0%26l%3Dblsat%2Cviirs%26bt%3D18.1%26et%3D18.1%26startDwell%3D0%26endDwell%3D0%26fps%3D30&width=1280&height=720&format=png&fps=30&tileFormat=mp4&startDwell=0&endDwell=0&fromScreenshot&minimalUI'
+    },
+    {
+        title: 'TSIP single frame (timestampOnlyUI)',
+        src: 'https://thumbnails-v2.createlab.org/thumbnail?root=https://headless.earthtime.org/%23v%3D4.56342%2C0%2C1.01%2ClatLng%26ps%3D50%26l%3Dbdrk%2Cpure_earth_tsip_by_pollutants_top_7%26bt%3D20160101%26et%3D20161231%26startDwell%3D0%26endDwell%3D0&width=1280&height=720&format=mp4&fps=30&tileFormat=mp4&startDwell=0&endDwell=0&fromScreenshot&timestampOnlyUI=true'
+    },
+    {
+        title: 'Coral reefs and bleaching (minimalUI and forceLegend)',
+        src: 'https://thumbnails-v2.createlab.org/thumbnail?root=https%3A%2F%2Fheadless.earthtime.org%2F%23v%3D37.96643%2C27.0601%2C0.48%2ClatLng%26t%3D0.75%26ps%3D0%26l%3Dbdrk%2Ccb%26bt%3D0.75%26et%3D0.75%26startDwell%3D0%26endDwell%3D0%26fps%3D10&width=840&height=600&format=png&fps=10&tileFormat=mp4&startDwell=0&endDwell=0&fromScreenshot&baseMapsNoLabels&minimalUI=true&forceLegend=true'
+    },
+    {
+        title: 'Coral reefs and bleaching (minimalUI and forceLegend and centerLegend)',
+        src: 'https://thumbnails-v2.createlab.org/thumbnail?root=https%3A%2F%2Fheadless.earthtime.org%2F%23v%3D37.96643%2C27.0601%2C0.48%2ClatLng%26t%3D0.75%26ps%3D0%26l%3Dbdrk%2Ccb%26bt%3D0.75%26et%3D0.75%26startDwell%3D0%26endDwell%3D0%26fps%3D10&width=840&height=600&format=png&fps=10&tileFormat=mp4&startDwell=0&endDwell=0&fromScreenshot&baseMapsNoLabels&minimalUI=true&forceLegend=true&centerLegend=true'
+    },
 ];
 
 function thumbnail_media_type(url) {
