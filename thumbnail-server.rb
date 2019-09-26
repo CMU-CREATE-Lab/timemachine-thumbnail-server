@@ -184,6 +184,8 @@ class ThumbnailGenerator
     # We've already added a trailing delim, add UI type without a delim
     if @cgi.params.has_key?('minimalUI')
       @root += "minimalUI=true"
+    elsif @cgi.params.has_key?('timestampOnlyUILeft')
+      @root += "timestampOnlyUILeft=true"
     elsif @cgi.params.has_key?('timestampOnlyUI')
       @root += "timestampOnlyUI=true"
       @root += '&timestampOnlyUICentered=true'
@@ -871,7 +873,7 @@ class ThumbnailGenerator
     uri = URI.parse(url)
     http = Net::HTTP.new(uri.host, uri.port)
     http.use_ssl = true
-    http.read_timeout = 1200
+    http.read_timeout = 3600 # wait 1 hour.  workers should abort before then
     response = http.get(URI(url))
 
     vlog(0, "Thumbnail returned from #{thumbnail_worker_hostname}, status code #{response.code}, body length #{response.body.size}")
