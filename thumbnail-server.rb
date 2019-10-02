@@ -95,31 +95,47 @@ class ThumbnailGenerator
     options = Selenium::WebDriver::Chrome::Options.new
     options.add_argument('--headless')
     options.add_argument('--hide-scrollbars')
+    if File.exists?('/.dockerenv')
+      options.add_argument('--disable-gpu')
+      options.add_argument('--no-sandbox')
+      options.add_argument('--disable-dev-shm-usage')
+    end
     driver = Selenium::WebDriver.for :chrome, options: options
     if $config['override_headless']
       url = url.sub('headless.earthtime.org', $config['override_headless'])
     end
     url += '&pauseWhenInitialized=true'
+    url += '&disableAnimation=true'
     vlog(shardno, "make_chrome loading #{url}")
 
     # Resize the window to desired width/height.
     driver.manage.window.resize_to(@output_width, @output_height)
 
-    # Navigate to the page; will block until the load is complete.
-    # Note: Any ajax requests or large data files may not be loaded yet.
-    #       We take care of that further down when taking the actual screenshots.
-    driver.navigate.to url
-    vlog(shardno, "make_chrome: #{driver.execute_script('{canvasLayer.setAnimate(false); return timelapse.frameno}')} frames before setAnimate(false)");
-
-    # Just in case
-    sleep(2)
-
-    driver.execute_script("timelapse.setNewView(#{@screenshot_bounds.to_json}, true);" + @extra_css)
-    ## Just in case
-    #sleep(1)
-
-    vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
-    return driver
+    5.times do |j|
+      # Navigate to the page; will block until the load is complete.
+      # Note: Any ajax requests or large data files may not be loaded yet.
+      #       We take care of that further down when taking the actual screenshots.
+      driver.navigate.to url
+      vlog(shardno, "make_chrome: #{driver.execute_script('{canvasLayer.setAnimate(false); return timelapse.frameno}')} frames before setAnimate(false)");
+      
+      # TODO: actually wait until all the layers are loaded, and then record how long that took
+      200.times do |i|
+        ready = driver.execute_script("return isEarthTimeLoaded()")
+        vlog(shardno, "#{i}: isEarthtimeLoaded=#{ready}")
+        if ready
+          driver.execute_script("timelapse.setNewView(#{@screenshot_bounds.to_json}, true);" + @extra_css)
+          
+          vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
+          return driver
+        end
+        sleep(0.5)
+      end
+      
+      vlog(shardno, "#{j}: make_chrome was never ready, retrying")
+      driver.navigate.refresh
+    end
+    vlog(shardno, "Oh gosh, failed many times to initialize chrome, aborting")
+    raise "Oh gosh, failed many times to initialize chrome, aborting"
   end
 
   def acquire_screenshot_semaphore()
@@ -426,12 +442,12 @@ class ThumbnailGenerator
         }
       }
 
-      nshards = (@nframes / 5).floor
+      nshards = (@nframes / 10).floor
       if nshards < 1
         nshards = 1
       end
-      if nshards > 6
-        nshards = 6
+      if nshards > 5
+        nshards = 5
       end
 
       $stats['nshards'] = nshards
