@@ -138,9 +138,19 @@ class ThumbnailGenerator
     raise "Oh gosh, failed many times to initialize chrome, aborting"
   end
 
+  def set_status(token)
+    if $statusfile
+      $statusfile.close()
+    end
+    if token
+      $statusfile = File.open("#{File.dirname(File.realpath(__FILE__))}/status-#{token}")
+    end
+  end
+
   def acquire_screenshot_semaphore()
     if $lockdir
       @semaphore = FlockSemaphore.new($lockdir)
+      set_status('waiting')
       while true
         lock = @semaphore.captureNonblock
         if lock
@@ -151,6 +161,7 @@ class ThumbnailGenerator
         end
         sleep(1)
       end
+      set_status(nil)
       thumbnail_worker_hostname = File.basename(lock).split('+')[1]
       vlog(0, "Thumbnail worker #{thumbnail_worker_hostname}")
       return thumbnail_worker_hostname
@@ -880,6 +891,7 @@ class ThumbnailGenerator
   end
 
   def delegate_thumbnail(thumbnail_worker_hostname)
+    set_status('delegated')
     url = "https://#{thumbnail_worker_hostname}#{ENV['REQUEST_URI']}"
     url += "&workerepoch=#{(Time.now.to_f * 1000).round}"
     $stats['delegatedTo'] = url
