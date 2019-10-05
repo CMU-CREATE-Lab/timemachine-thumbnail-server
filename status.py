@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3.7
 
 import cgi, codecs, json, os, re, subprocess, sys, urllib
 
@@ -39,7 +39,7 @@ log_size = os.path.getsize(logfile_path)
 if log_size > max_size:
     print('Logfile is %.1f MB, only reading last %.1f MB<br>' % (log_size / 1e6, max_size / 1e6))
     
-cmd = 'tail --bytes=%d "%s" | tail +2' % (max_size, logfile_path)
+cmd = 'tail --bytes=%d "%s" | tail --lines=+2' % (max_size, logfile_path)
 
 if show_id:
     cmd += ' | grep %s' % show_id
