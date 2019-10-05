@@ -34,6 +34,7 @@ load File.dirname(File.realpath(__FILE__)) + '/mercator.rb'
 load File.dirname(File.realpath(__FILE__)) + '/point.rb'
 load File.dirname(File.realpath(__FILE__)) + '/bounds.rb'
 load File.dirname(File.realpath(__FILE__)) + '/FlockSemaphore.rb'
+load File.dirname(File.realpath(__FILE__)) + '/stat.rb'
 
 filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 
@@ -65,6 +66,9 @@ def vlog(shardno, msg)
   $vlog_logfile.write("#{Time.now.strftime('%Y-%m-%d %H:%M:%S.%3N')} THUMB #{Process.pid}:#{$id}:#{shardno} #{msg}\n")
   $vlog_logfile.flush
 end
+
+Stat.set_hostname('-')
+Stat.set_service('Thumbnails')
 
 cgi = CGI.new
 cgi.params = CGI::parse(ENV.to_hash['REQUEST_URI'])
@@ -1028,11 +1032,13 @@ class ThumbnailGenerator
         if @from_screenshot
           thumbnail_worker_hostname = acquire_screenshot_semaphore()
         end
-
+        
         if @from_screenshot and thumbnail_worker_hostname != 'localhost'
           # Writes to @tmpfile
+          $status_url = "https://#{thumbnail_worker_hostname}/status?id=#{Process.pid}:#{$id}"
           delegate_thumbnail(thumbnail_worker_hostname)
         else
+          $status_url = "#{File.dirname(ENV.to_hash['SCRIPT_URI'])}/status?id=#{Process.pid}:#{$id}"
           # Writes to @tmpfile
           compute_thumbnail()
         end
@@ -1043,7 +1049,9 @@ class ThumbnailGenerator
         pt = Process.times
         $stats['cpuTime'] = pt.utime + pt.stime + pt.cutime + pt.cstime
         vlog(0, "ENDTHUMBNAIL #{$request_url} #{JSON.generate($stats)}")
-
+        Stat.info("Completed thumbnail #{Process.pid}:#{$id} on #{ENV.to_hash['HTTP_HOST']} in #{'%.1f' % (Time.now - $begin_time)} seconds",
+                  details: "<a href=\"#{$status_url}\">More info</a>")
+        Stat.up("Last thumbnail successful")
         if cache_file
           File.rename @tmpfile, cache_file
           vlog(0, "Moved output file to cache: #{cache_file}")
@@ -1099,6 +1107,9 @@ class ThumbnailGenerator
       $debug.insert 2, "<pre>#{e}\n#{e.backtrace.join("\n")}</pre>"
       $debug.insert 3, "<hr>"
       @cgi.out('status' => 'BAD_REQUEST', 'Access-Control-Allow-Origin' => '*') {$debug.join('')}
+      Stat.info("Thumbnail failed #{Process.pid}:#{$id} on #{ENV.to_hash['HTTP_HOST']} in #{'%.1f' %  (Time.now - $begin_time)} seconds",
+                details: "<a href=\"#{$status_url}\">More info</a>")
+      Stat.up("Last thumbnail failed")
     end
   end
 end

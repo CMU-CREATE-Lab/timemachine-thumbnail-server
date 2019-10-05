@@ -61,7 +61,7 @@ for line in p.stdout:
         continue
     tokens = line.split(None, 6)
     try:
-        id = tokens[3]
+        id = ':'.join(tokens[3].split(':')[:2])
     except:
         continue
     if not id in thumbs:
@@ -87,7 +87,7 @@ for id in reversed(ids[-num_thumbnails:]):
     queryparams =  urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
     if not 'format' in queryparams:
         continue
-    print('<h3>%s %sx%s %s %s</h3>' % (queryparams['format'][0], queryparams['width'][0], queryparams['height'][0], tokens[0], tokens[1].split('.')[0]))
+
     stats = {}
 
     if 'CHECKPOINTTHUMBNAIL' in thumbs[id]:
@@ -98,7 +98,60 @@ for id in reversed(ids[-num_thumbnails:]):
         json_str = thumbs[id]['ENDTHUMBNAIL'].split(None, 6)[-1]
         stats = json.loads(json_str)
 
+    # Compute completion status
+    completion_status_msg = []
+
+    if 'ENDTHUMBNAIL' in thumbs[id]:
+        if not 'totalTimeSecs' in stats:
+            continue
+        completion_status_msg.append('<h4>Finished</h4>')
+        completion_status = 'Finished'
+        completion_color = '#55ff55'
+
+        if 'videoFrameCount' in stats:
+            completion_status_msg.append('%d frames in %.1f seconds (%.1f frames rendered per second)<br>' %
+                                         (stats['videoFrameCount'], stats['totalTimeSecs'], stats['videoFrameCount'] / stats['totalTimeSecs']))
+        else:
+            completion_status_msg.append('Took %.1f seconds<br>' % (stats['totalTimeSecs']))
+        if 'frameEfficiency' in stats:
+            completion_status_msg.append('Frame efficiency %.1f%%<br>' % (stats['frameEfficiency'] * 100))
+            
+        if 'recompute' in url:
+            completion_status_msg.append('WARNING, RECOMPUTE TAG, DO NOT FOLLOW THIS LINK: %s<br>' % url)
+        elif queryparams['format'][0] == 'mp4':
+            completion_status_msg.append('<a href="%s"><video src="%s" autoplay loop muted style="max-height:300px"></video><br>link</a><br>' % (url, url))
+        else:
+            completion_status_msg.append('<a href="%s"><img src="%s" style="max-height:300px"><br>link</a><br>' % (url, cgi.escape(url)))
+    else:
+        pid = id.split(':')[0]
+        if os.path.exists('/proc/%s' % pid):
+            completion_status = 'In progress'
+            completion_color = '#ffff55'
+            completion_status_msg.append('%s<br>' % cgi.escape(url))
+        else:
+            completion_status = 'Failed'
+            completion_color = '#ff5555'
+            completion_status_msg.append('<h4>Died before finishing</h4>\n%s<br>' % cgi.escape(url))
+        if 'Need' in thumbs[id]:
+            completion_status_msg.append('<code>%s</code><br>' % thumbs[id]['Need'])
+        if 'FATALERROR' in stats:
+            stats['FATALERROR'] = stats['FATALERROR'][0:500]
+            completion_status_msg.append('<h4>Fatal error</h4>\n<pre>%s</pre>\n' % cgi.escape(stats['FATALERROR']))
+        if 'CHECKPOINTTHUMBNAIL' in thumbs[id]:
+            completion_status_msg.append('<h4>Last checkpoint</h4><code>%s</code><br>' % cgi.escape(thumbs[id]['CHECKPOINTTHUMBNAIL'][0:500]))
+        completion_status_msg.append('<h4>Last line</h4><code>%s</code><br>' % cgi.escape(thumbs[id]['last'][0:500]))
+
+    print('<h3 style="background-color:%s">%s <a href="status?id=%s">thumbnail %s</a> %s %s</h3>' %
+          (completion_color, completion_status, id, id, tokens[0], tokens[1].split('.')[0]))
+
+    print('%s %s x %s' % (queryparams['format'][0], queryparams['width'][0], queryparams['height'][0]))
+    if 'videoFrameCount' in stats:
+        print(' x %s frames' % stats['videoFrameCount'])
+
+    print('\n'.join(completion_status_msg))
+
     request = ""
+
     if 'HTTP_REFERER' in stats:
         request += "<b>Referer:</b> %s " % stats['HTTP_REFERER']
     if 'REMOTE_ADDR' in stats:
@@ -113,37 +166,6 @@ for id in reversed(ids[-num_thumbnails:]):
     if 'delegatedTo' in stats:
         print('<h4>Delegated to</h4>\n%s<br>\n' % cgi.escape(stats['delegatedTo']))
 
-    if 'ENDTHUMBNAIL' in thumbs[id]:
-        if not 'totalTimeSecs' in stats:
-            continue
-        print('<h4>Finished</h4>\n')
-        if 'videoFrameCount' in stats:
-            print('%d frames in %.1f seconds (%.1f frames rendered per second)<br>' % (stats['videoFrameCount'], stats['totalTimeSecs'], stats['videoFrameCount'] / stats['totalTimeSecs']))
-        else:
-            print('Took %.1f seconds<br>' % (stats['totalTimeSecs']))
-        if 'frameEfficiency' in stats:
-            print('Frame efficiency %.1f%%<br>' % (stats['frameEfficiency'] * 100))
-            
-        if 'recompute' in url:
-            print('WARNING, RECOMPUTE TAG, DO NOT FOLLOW THIS LINK: %s<br>' % url)
-        elif queryparams['format'][0] == 'mp4':
-            print('<a href="%s"><video src="%s" autoplay loop muted style="max-height:300px"></video><br>link</a>' % (url, url))
-        else:
-            print('<a href="%s"><img src="%s" style="max-height:300px"><br>link</a>' % (url, cgi.escape(url)))
-    else:
-        pid = id.split(':')[0]
-        if os.path.exists('/proc/%s' % pid):
-            print('<h4>In progress</h4>\n%s<br>' % cgi.escape(url))
-        else:
-            print('<h4>Died before finishing</h4>\n%s<br>' % cgi.escape(url))
-        if 'Need' in thumbs[id]:
-            print('<code>%s</code><br>' % thumbs[id]['Need'])
-        if 'FATALERROR' in stats:
-            stats['FATALERROR'] = stats['FATALERROR'][0:500]
-            print('<h4>Fatal error</h4>\n<pre>%s</pre>\n' % cgi.escape(stats['FATALERROR']))
-        if 'CHECKPOINTTHUMBNAIL' in thumbs[id]:
-            print('<h4>Last checkpoint</h4><code>%s</code><br>' % cgi.escape(thumbs[id]['CHECKPOINTTHUMBNAIL'][0:500]))
-        print('<h4>Last line</h4><code>%s</code><br>' % cgi.escape(thumbs[id]['last'][0:500]))
     print('<h4>Raw stats</h4>')
     if stats:
         print('<code>%s</code><br>' % cgi.escape(json.dumps(stats)))
@@ -151,7 +173,5 @@ for id in reversed(ids[-num_thumbnails:]):
     if show_id:
         print('<h4>Full log</h4>')
         print('<pre>%s</pre><br>' % cgi.escape(''.join(all_lines)))
-    else:
-        print('<h4><a href="status?id=%s">Show full log</a></h4>' % id)
 
 print(header_footer)
