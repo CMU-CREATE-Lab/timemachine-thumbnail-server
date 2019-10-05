@@ -124,19 +124,22 @@ for id in reversed(ids[-num_thumbnails:]):
             completion_status_msg.append('<a href="%s"><img src="%s" style="max-height:300px"><br>link</a><br>' % (url, cgi.escape(url)))
     else:
         pid = id.split(':')[0]
-        if os.path.exists('/proc/%s' % pid):
+        if 'FATALERROR' in stats:
+            completion_status = 'Failed'
+            completion_color = '#ff5555'
+            completion_status_msg.append('%s<br>' % cgi.escape(url))
+            stats['FATALERROR'] = stats['FATALERROR'][0:1000]
+            completion_status_msg.append('<h4>Fatal error</h4>\n<pre>%s</pre>\n' % cgi.escape(stats['FATALERROR']))
+        else:
             completion_status = 'In progress'
             completion_color = '#ffff55'
             completion_status_msg.append('%s<br>' % cgi.escape(url))
-        else:
-            completion_status = 'Failed'
-            completion_color = '#ff5555'
-            completion_status_msg.append('<h4>Died before finishing</h4>\n%s<br>' % cgi.escape(url))
+            if not os.path.exists('/proc/%s' % pid):
+                completion_status_msg.append('(pid %s seems not to exist; maybe done now?)<br>' % pid)
+                
         if 'Need' in thumbs[id]:
             completion_status_msg.append('<code>%s</code><br>' % thumbs[id]['Need'])
-        if 'FATALERROR' in stats:
-            stats['FATALERROR'] = stats['FATALERROR'][0:500]
-            completion_status_msg.append('<h4>Fatal error</h4>\n<pre>%s</pre>\n' % cgi.escape(stats['FATALERROR']))
+
         if 'CHECKPOINTTHUMBNAIL' in thumbs[id]:
             completion_status_msg.append('<h4>Last checkpoint</h4><code>%s</code><br>' % cgi.escape(thumbs[id]['CHECKPOINTTHUMBNAIL'][0:500]))
         completion_status_msg.append('<h4>Last line</h4><code>%s</code><br>' % cgi.escape(thumbs[id]['last'][0:500]))
