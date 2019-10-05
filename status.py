@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import cgi, codecs, json, os, subprocess, sys, urllib
+import cgi, codecs, json, os, re, subprocess, sys, urllib
 
 sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
 
@@ -14,37 +14,49 @@ print('h4 { margin-left: -10px; margin-bottom: 0px; margin-top:2px }')
 print('pre { margin-top: 0px; margin-bottom: 0px }')
 print('</style>')
 
-logfile_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/log.txt"
-#logfile_path = '/t/thumbnails.cmucreatelab.org/log.txt'
-
-thumbs = {}
-
-log = open(logfile_path, encoding='utf-8')
-log.seek(0, os.SEEK_END)
-size = log.tell()
-max_size = 100000000
-if size > max_size:
-    pos = size - max_size
-    log.seek(pos)
-    print('Logfile %.1f MB, skipping to pos %.1f MB<br>' % (size / 1e6, pos / 1e6))
-    # Skip the first line since it might be partial
-    lines = log.readlines()[1:]
-else:
-    log.seek(0)
-    lines = log.readlines()
-
-ids = []
-
 if os.environ['QUERY_STRING']:
     params =  urllib.parse.parse_qs(os.environ['QUERY_STRING'])
 else:
     params = {}
 
+logfile_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/log.txt"
+
+thumbs = {}
+
+if 'id' in params:
+    show_id = params['id'][0]
+    if not re.match(r'[\d:]+', show_id):
+        print('Illegal format for id')
+        exit(-1)
+    max_size = 1000 * 1e6 # 1 GB
+    print('<h2>Showing detail for thumbnail request %s</h2>' % show_id)
+else:
+    show_id = None
+    max_size = 100 * 1e6 # 100 MB
+
+log_size = os.path.getsize(logfile_path)
+
+if log_size > max_size:
+    print('Logfile is %.1f MB, only reading last %.1f MB<br>' % (log_size / 1e6, max_size / 1e6))
+    
+cmd = 'tail --bytes=%d "%s" | tail +2' % (max_size, logfile_path)
+
+if show_id:
+    cmd += ' | grep %s' % show_id
+
+p = subprocess.Popen(cmd, shell=True, encoding='utf-8', stdout=subprocess.PIPE)
+
+ids = []
+
 num_thumbnails = 50
 if 'n' in params:
     num_thumbnails = int(params['n'][0])
+
+all_lines = []
     
-for line in lines:
+for line in p.stdout:
+    if show_id:
+        all_lines.append(line)
     if line.strip() == "":
         continue
     tokens = line.split(None, 6)
@@ -136,5 +148,10 @@ for id in reversed(ids[-num_thumbnails:]):
     if stats:
         print('<code>%s</code><br>' % cgi.escape(json.dumps(stats)))
     print('<code>More: grep %s %s</code><br>' % (':'.join(id.split(':')[0:2]), logfile_path))
+    if show_id:
+        print('<h4>Full log</h4>')
+        print('<pre>%s</pre><br>' % cgi.escape(''.join(all_lines)))
+    else:
+        print('<h4><a href="status?id=%s">Show full log</a></h4>' % id)
 
 print(header_footer)
