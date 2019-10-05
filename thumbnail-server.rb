@@ -120,7 +120,11 @@ class ThumbnailGenerator
       # Note: Any ajax requests or large data files may not be loaded yet.
       #       We take care of that further down when taking the actual screenshots.
       driver.navigate.to url
-      vlog(shardno, "make_chrome: #{driver.execute_script('{canvasLayer.setAnimate(false); return timelapse.frameno}')} frames before setAnimate(false)");
+      begin
+        vlog(shardno, "make_chrome: #{driver.execute_script('{canvasLayer.setAnimate(false); return timelapse.frameno}')} frames before setAnimate(false)");
+      rescue
+        next
+      end
       
       # TODO: actually wait until all the layers are loaded, and then record how long that took
       200.times do |i|
