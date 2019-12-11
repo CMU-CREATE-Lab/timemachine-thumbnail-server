@@ -423,8 +423,8 @@ class ThumbnailGenerator
             driver.execute_script("timelapse.seek(#{seek_time});")
 
             while true do
-              # Wait at most 30 seconds until we assume things are drawn
-              if (Time.now - before) > 30
+              # Wait at most 90 seconds until we assume things are drawn
+              if (Time.now - before) > 90
                 vlog(shardno, "giving up on frame #{frame} after #{((Time.now - before) * 1000).round}ms; stopping driver")
                 frame_queue << frame
                 total_chrome_frames += driver.execute_script("return timelapse.frameno")
