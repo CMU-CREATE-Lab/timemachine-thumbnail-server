@@ -1,7 +1,7 @@
 <html>
 <head>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/URI.js/1.19.1/URI.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/URI.js/1.19.2/URI.min.js"></script>
 <style>
 .test {
   display:inline-block;
@@ -72,7 +72,7 @@ function init() {
 	var title = test.title;
 	var node;
 	var media_type = thumbnail_media_type(test.src);
-	
+
 	$("body").append(`<h2>${i} ${title} (${media_type})</h2>`);
 	var prefixes = [url_prefix(test.src), url_prefix(document.location)];
 	for (var j = 0; j < prefixes.length; j++) {
@@ -87,7 +87,7 @@ function init() {
 	}
     }
 }
-    
+
 $(init);
 </script>
 
@@ -120,6 +120,6 @@ Single-frame PNG of Shenango with static label
 World JPG from Earth Timelapse
 </div>
     -->
-    
+
 </body>
 </html>
