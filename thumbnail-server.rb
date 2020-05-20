@@ -871,10 +871,6 @@ class ThumbnailGenerator
 
     @is_image = true
     @is_video = (@format == 'mp4' or @format == 'webm') ? true : false
-    if @legendHTML
-      @is_video = false
-      @format = 'json'
-    end
     
     @raw_formats = ['rgb24', 'gray8']
 
@@ -976,6 +972,7 @@ class ThumbnailGenerator
       @legendHTML = @cgi.params['legendHTML'][0] ? true : false
       if @legendHTML
         @nframes = 1
+        @format = 'json'
       end
 
       recompute = @cgi.params.has_key? 'recompute'
