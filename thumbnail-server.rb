@@ -85,8 +85,6 @@ def parse_bounds(cgi, key)
   bounds
 end
 
-
-
 class ThumbnailGenerator
   def initialize()
     # cache and tmp live in the containing directory
@@ -444,7 +442,17 @@ class ThumbnailGenerator
               )
               vlog(shardno, "complete=#{complete} seek_time=#{seek_time} after_time=#{after_time} before_frameno=#{before_frameno} frameno=#{frameno}")
               if complete
-                driver.save_screenshot("#{@tmpfile_screenshot_input_path}/#{'%04d' % frame}.png")
+                if @legendHTML
+                  #@legendContent = driver.execute_script("return {x:3};")
+                  @legendContent = driver.execute_script(%Q(
+                    return {
+                      HTML: getLegendHTML(),
+                      width:  $('#layers-legend').width(),
+                      height: $('#layers-legend').height()
+                    };))
+                else
+                  driver.save_screenshot("#{@tmpfile_screenshot_input_path}/#{'%04d' % frame}.png")
+                end
                 vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms (chrome frame #{frameno})");
                 break
               else
@@ -863,7 +871,11 @@ class ThumbnailGenerator
 
     @is_image = true
     @is_video = (@format == 'mp4' or @format == 'webm') ? true : false
-
+    if @legendHTML
+      @is_video = false
+      @format = 'json'
+    end
+    
     @raw_formats = ['rgb24', 'gray8']
 
     if @raw_formats.include? @format or @format == 'gif' or @is_video
@@ -895,7 +907,12 @@ class ThumbnailGenerator
       find_tile_for_non_screenshot()
     end
 
-    encode_frames()
+    if @legendHTML
+      @tmpfile = "#{@tmp_dir}/#{Process.pid}.#{(Time.now.to_f)}-legend.json"
+      File.open(@tmpfile, 'w') { |file| file.write(@legendContent.to_json) }
+    else
+      encode_frames()
+    end
   end
 
   def delegate_thumbnail(thumbnail_worker_hostname)
@@ -955,6 +972,11 @@ class ThumbnailGenerator
 
       @nframes = @cgi.params['nframes'][0] || 1
       @nframes = @nframes.to_i
+
+      @legendHTML = @cgi.params['legendHTML'][0] ? true : false
+      if @legendHTML
+        @nframes = 1
+      end
 
       recompute = @cgi.params.has_key? 'recompute'
 

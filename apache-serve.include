@@ -41,6 +41,10 @@ Timeout 3600
   Header set Content-Type "video/webm"
   Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
 </ElseIf>
+<ElseIf "%{QUERY_STRING} =~ /legendHTML=true/">
+  Header set Content-Type "application/json"
+  Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
+</ElseIf>
 
 # Status server
 RewriteRule ^/status$ ${THUMBROOT}/timemachine-thumbnail-server/status.py [L,END]
