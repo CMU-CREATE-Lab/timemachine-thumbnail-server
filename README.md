@@ -51,7 +51,7 @@ Optional number of frames to output.  Default is 1, to output a single frame.
 
 `format=`_suffix_
 
-Optional output format (`jpg`, `png`, `gif`, `mp4`, `webm`, `rgb24`).  If omitted, defaults to jpg.  `mp4`, `webm`, `gif`, and `rgb24` allow multiple-frame animations.  `jpg` and `png` are single-frame formats, which require nframes be omitted or set to 1.  `rgb24` packs output as 3 bytes per pixel (r, g, b), in row-major order.  
+Optional output format (`jpg`, `png`, `gif`, `mp4`, `webm`, `rgb24`, `zip`).  If omitted, defaults to jpg.  `mp4`, `webm`, `gif`, `rgb24`, and `zip` allow multiple-frame animations.  `jpg` and `png` are single-frame formats, which require nframes be omitted or set to 1.  `rgb24` packs output as 3 bytes per pixel (r, g, b), in row-major order.  `zip` creates a zipfile of individual PNG-encoded frames.
 
 `delay=`_delay_
 
