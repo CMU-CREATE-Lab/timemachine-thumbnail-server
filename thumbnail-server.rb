@@ -713,6 +713,15 @@ class ThumbnailGenerator
     end
 
     #
+    # Zip of png frames
+    #
+    if @format == 'zip'
+      @tmpfile_zip_dir = "#{@tmp_dir}/zip.#{Process.pid}.#{(Time.now.to_f)}"
+      FileUtils.mkdir_p("#{@tmpfile_zip_dir}/frames")
+      cmd += " #{@tmpfile_zip_dir}/frames/frame%06d.png && (cd #{@tmpfile_zip_dir} && zip -r \"#{@tmpfile}\" frames)"
+    end
+
+    #
     # video (mp4/webm)
     #
     #
@@ -731,10 +740,13 @@ class ThumbnailGenerator
       cmd += " -f image2pipe -vcodec ppm - | /usr/local/bin/gm convert -evaluate-sequence min - "
     end
 
-    cmd += " \"#{@tmpfile}\""
+    if @format != 'zip'
+      cmd += " \"#{@tmpfile}\""
+    end
 
     $debug << "Running: '#{cmd}'<br>"
     output = `#{cmd} 2>&1`;
+
     if not $?.success?
       $debug << "ffmpeg failed with output:<br>"
       $debug << "<pre>#{output}</pre>"
@@ -870,7 +882,7 @@ class ThumbnailGenerator
     end
 
     @is_image = true
-    @is_video = (@format == 'mp4' or @format == 'webm') ? true : false
+    @is_video = (@format == 'mp4' or @format == 'webm' or @format == 'zip') ? true : false
     
     @raw_formats = ['rgb24', 'gray8']
 
@@ -1086,6 +1098,9 @@ class ThumbnailGenerator
         # Cleanup screenshot work
         if @tmpfile_screenshot_input_path
           FileUtils.rm_rf(@tmpfile_screenshot_input_path)
+          if @format == 'zip'
+            FileUtils.rm_rf(@tmpfile_zip_dir)
+          end
         end
 
         #
@@ -1105,7 +1120,8 @@ class ThumbnailGenerator
           'json' => 'application/json',
           'mp4' => 'video/mp4',
           'webm' => 'video/webm',
-          'png' => 'image/png'
+          'png' => 'image/png',
+          'zip' => 'application/zip'
         }
         mime_type = mime_types[@format] || 'application/octet-stream'
 
