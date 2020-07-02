@@ -123,20 +123,20 @@ class ThumbnailGenerator
       rescue
         next
       end
-      
+
       # TODO: actually wait until all the layers are loaded, and then record how long that took
       200.times do |i|
         ready = driver.execute_script("return isEarthTimeLoaded()")
         vlog(shardno, "#{i}: isEarthtimeLoaded=#{ready}")
         if ready
           driver.execute_script("timelapse.setNewView(#{@screenshot_bounds.to_json}, true);" + @extra_css)
-          
+
           vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
           return driver
         end
         sleep(0.5)
       end
-      
+
       vlog(shardno, "#{j}: make_chrome was never ready, retrying")
       driver.navigate.refresh
     end
@@ -883,7 +883,7 @@ class ThumbnailGenerator
 
     @is_image = true
     @is_video = (@format == 'mp4' or @format == 'webm' or @format == 'zip') ? true : false
-    
+
     @raw_formats = ['rgb24', 'gray8']
 
     if @raw_formats.include? @format or @format == 'gif' or @is_video
@@ -966,7 +966,7 @@ class ThumbnailGenerator
 
       if @cgi.params.has_key? 'test'
         test_html = File.open(File.dirname(File.realpath(__FILE__)) + '/test.html').read
-        @cgi.out('Access-Control-Allow-Origin' => '*') {test_html}
+        @cgi.out() {test_html}
         exit
       end
 
@@ -1067,7 +1067,7 @@ class ThumbnailGenerator
         if @from_screenshot
           thumbnail_worker_hostname = acquire_screenshot_semaphore()
         end
-        
+
         if @from_screenshot and thumbnail_worker_hostname != 'localhost'
           # Writes to @tmpfile
           $status_url = "https://#{thumbnail_worker_hostname}/status?id=#{Process.pid}:#{$id}"
@@ -1130,9 +1130,9 @@ class ThumbnailGenerator
           bytes = Rack::Utils.get_byte_ranges(ENV['HTTP_RANGE'], size)[0]
           offset = bytes.begin
           length = (bytes.end - bytes.begin) + 1
-          @cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*', 'Accept-Ranges' => 'bytes', 'Content-Range' => "bytes #{bytes.begin}-#{bytes.end}/#{size}", 'Content-Length' => length, 'status' => "206") {image_data}
+          @cgi.out('type' => mime_type, 'Accept-Ranges' => 'bytes', 'Content-Range' => "bytes #{bytes.begin}-#{bytes.end}/#{size}", 'Content-Length' => length, 'status' => "206") {image_data}
         else
-          @cgi.out('type' => mime_type, 'Access-Control-Allow-Origin' => '*') {image_data}
+          @cgi.out('type' => mime_type) {image_data}
         end
       end
 
@@ -1145,7 +1145,7 @@ class ThumbnailGenerator
       $debug.insert 0, "400: Bad Request<br>"
       $debug.insert 2, "<pre>#{e}\n#{e.backtrace.join("\n")}</pre>"
       $debug.insert 3, "<hr>"
-      @cgi.out('status' => 'BAD_REQUEST', 'Access-Control-Allow-Origin' => '*') {$debug.join('')}
+      @cgi.out('status' => 'BAD_REQUEST') {$debug.join('')}
       Stat.info("Thumbnail failed #{Process.pid}:#{$id} on #{ENV.to_hash['HTTP_HOST']} in #{'%.1f' %  (Time.now - $begin_time)} seconds",
                 details: "<a href=\"#{$status_url}\">More info</a>")
       Stat.up("Last thumbnail failed")
