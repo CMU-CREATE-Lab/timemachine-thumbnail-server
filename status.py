@@ -118,6 +118,8 @@ for id in reversed(ids[-num_thumbnails:]):
             
         if 'recompute' in url:
             completion_status_msg.append('WARNING, RECOMPUTE TAG, DO NOT FOLLOW THIS LINK: %s<br>' % url)
+        elif queryparams['format'][0] == 'zip':
+            pass
         elif queryparams['format'][0] == 'mp4':
             completion_status_msg.append('<a href="%s"><video src="%s" autoplay loop muted style="max-height:300px"></video><br>link</a><br>' % (url, url))
         else:
