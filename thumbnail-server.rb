@@ -85,6 +85,8 @@ def parse_bounds(cgi, key)
   bounds
 end
 
+@use_new_api = false
+
 class ThumbnailGenerator
   def initialize()
     # cache and tmp live in the containing directory
@@ -120,12 +122,19 @@ class ThumbnailGenerator
       driver.navigate.to url
       # TODO: actually wait until all the layers are loaded, and then record how long that took
       200.times do |i|
-        ready = driver.execute_script("return isEarthTimeLoaded()")
-        vlog(shardno, "#{i}: isEarthtimeLoaded=#{ready}")
+        ready = driver.execute_script(%{
+          if (window.gFrameGrab) {
+            return window.gFrameGrab.isLoaded() ? 'newApi' : false;
+          } else if (window.isEarthTimeLoaded) {
+            return window.isEarthTimeLoaded() ? 'oldApi' : false;
+          } else {
+            return false;
+          }
+        })
+        vlog(shardno, "#{i}: isLoaded=#{ready}")
         if ready
-          driver.execute_script("timelapse.setNewView(#{@screenshot_bounds.to_json}, true);" + @extra_css)
-
-          vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms")
+          @use_new_api = ready == "newApi"
+          vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms, use_new_api=#{@use_new_api}")
           return driver
         end
         sleep(0.5)
@@ -184,8 +193,6 @@ class ThumbnailGenerator
         return nil
       end
     end
-
-    @extra_css = "";
 
     # Convert URL encoded characters back to their original values
     @root.gsub!("03D", "=")
@@ -424,9 +431,23 @@ class ThumbnailGenerator
                 driver = nil
                 break
               end
-              (complete, after_time, before_frameno, frameno) = driver.execute_script(
+              if @use_new_api
+                frame_state = {"bounds"=>@screenshot_bounds, "seek_time"=>seek_time}
+                framegrab_info = driver.execute_script(
+                  "return gFrameGrab.captureFrame(#{frame_state.to_json});"
+                )
+                complete = framegrab_info['complete']
+                after_time = framegrab_info['after_time']
+                before_frameno = framegrab_info['before_frameno']
+                frameno = framegrab_info['frameno']
+                aux_info = framegrab_info['aux_info']
+                vlog(shardno, "complete=#{complete} seek_time=#{seek_time} after_time=#{after_time} before_frameno=#{before_frameno} frameno=#{frameno}")
+                if aux_info
+                  vlog(shardno, "aux_info: #{aux_info}")
+                end
+              else
+                (complete, after_time, before_frameno, frameno) = driver.execute_script(
                 "{" +
-                @extra_css +
                 "var before_frameno = timelapse.frameno;" +
                 "timelapse.setNewView(#{@screenshot_bounds.to_json}, true);" +
                 "timelapse.seek(#{seek_time});" +
@@ -434,7 +455,7 @@ class ThumbnailGenerator
                 "return [timelapse.lastFrameCompletelyDrawn, timelapse.getCurrentTime(), before_frameno, timelapse.frameno];" +
                 "}"
               )
-              vlog(shardno, "complete=#{complete} seek_time=#{seek_time} after_time=#{after_time} before_frameno=#{before_frameno} frameno=#{frameno}")
+              end
               if complete
                 if @legendHTML
                   #@legendContent = driver.execute_script("return {x:3};")
@@ -445,7 +466,9 @@ class ThumbnailGenerator
                       height: $('#layers-legend').height()
                     };))
                 else
-                  driver.save_screenshot("#{@tmpfile_screenshot_input_path}/#{'%04d' % frame}.png")
+                  screenshot_path = "#{@tmpfile_screenshot_input_path}/#{'%04d' % frame}.png"
+                  driver.save_screenshot(screenshot_path)
+                  vlog(shardno, "size of screenshot is #{File.size(screenshot_path)}")
                 end
                 vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms (chrome frame #{frameno})");
                 break
