@@ -876,9 +876,103 @@ class ThumbnailGenerator
     frame_time = @cgi.params['frameTime'][0].to_f
     start_frame = @cgi.params['startFrame'][0]
 
-    # If both frameTime and startFrame are passed in, startFrame takes precedence.
+    # Special case where we only pass in time and not full date as well
+    start_time = @cgi.params['startTime'][0]
+    end_time = @cgi.params['endTime'][0]
+    # Our input times can be in the following formats:
+    # hhmmss (for the above case), YYYYMMDDhhmmss, YYYYMMDDhhmm, YYYYMMDD, YYYYMM, YYYY
+    bt = start_time || @cgi.params['bt'][0]
+    et = end_time || @cgi.params['et'][0]
+
     dataset_frame_length = (@dataset_num_frames / @dataset_fps) / @dataset_num_frames
-    if start_frame
+
+    # If both frameTime and startFrame are passed in, startFrame takes precedence.
+    # Further precedence are for bt & et, which are more like human readable date strings.
+    if bt and et and bt.length == et.length
+      possible_input_formats = {
+        14 => "%Y%m%d%H%M%S",
+        12 => "%Y%m%d%H%M",
+        8 => "%Y%m%d",
+        6 => "%Y%m",
+        4 => "%Y"
+      }
+      input_format = start_time ? "%H%M%S" : possible_input_formats[bt.length]
+
+      if (start_time and start_time.length != 6) or not input_format
+        raise "Invalid format for begin and end times"
+      end
+
+      # We need to figure out roughly what format our capture times are in. This will likely never be perfect but close enough.
+      # TODO: Note that a capture time could be blank string or a string that says "NULL" but we currently ignore this.
+      first_capture_time = @tm['capture-times'][0]
+      date_delim = "-"
+      is12Hour = false
+      if first_capture_time.include?("/")
+        date_delim = "/"
+      end
+      if first_capture_time.match(/ AM| PM/)
+        is12Hour = true
+      end
+
+      capture_time_noformat = first_capture_time.gsub(/\/|-| |:|AM|PM/,'')
+
+      if capture_time_noformat.length == 4
+        capture_time_date_format = "%Y"
+      elsif first_capture_time.split(date_delim)[0].length == 4
+        if capture_time_noformat.length == 6
+          capture_time_date_format = "%Y#{date_delim}%m"
+        elsif capture_time_noformat.length >= 8
+          capture_time_date_format = "%Y#{date_delim}%m#{date_delim}%d"
+        end
+      else
+        capture_time_date_format = "%m#{date_delim}%d#{date_delim}%Y"
+      end
+
+      if capture_time_noformat.length > 8
+        seconds_field = capture_time_noformat.length > 12 ? ":%S" : ""
+        if is12Hour
+          capture_time_time_format = " %I:%M#{seconds_field} %p"
+        else
+          capture_time_time_format = " %H:%M#{seconds_field}"
+        end
+      end
+
+      capture_time_format = capture_time_date_format + capture_time_time_format
+
+      if start_time
+        input_format = capture_time_date_format + " " + input_format
+        bt = first_capture_time.split(" ")[0] + " " + bt
+        et = first_capture_time.split(" ")[0] + " " + et
+      end
+
+      begin
+        start_capture_time = Time.strptime(bt, input_format).strftime(capture_time_format)
+        end_capture_time = Time.strptime(et, input_format).strftime(capture_time_format)
+      rescue
+        raise "Invalid format for begin and end times"
+      end
+
+      tmp_start_frame = @tm['capture-times'].index(start_capture_time)
+      tmp_end_frame = @tm['capture-times'].index(end_capture_time)
+
+      # If we can't find exact match, find closest time match
+      if start_time and (tmp_start_frame == nil or tmp_end_frame == nil)
+        capture_times_as_epochs = @tm['capture-times'].map{|capture_time| Time.strptime(capture_time, capture_time_format).to_i}
+        start_capture_time_as_epoch =  Time.strptime(start_capture_time, capture_time_format).to_i
+        end_capture_time_as_epoch =  Time.strptime(end_capture_time, capture_time_format).to_i
+
+        tmp_start_frame = capture_times_as_epochs.bsearch_index {|x| x >= start_capture_time_as_epoch}
+        tmp_end_frame = capture_times_as_epochs.bsearch_index {|x| x >= end_capture_time_as_epoch}
+      end
+
+      if tmp_start_frame == nil or tmp_end_frame == nil
+        start_frame = (frame_time / dataset_frame_length).floor
+      else
+        start_frame = tmp_start_frame
+        frame_time = start_frame * dataset_frame_length
+        @nframes = tmp_end_frame - tmp_start_frame + 1 if tmp_end_frame >= tmp_start_frame
+      end
+    elsif start_frame
       start_frame = start_frame.to_i
       frame_time = start_frame * dataset_frame_length
     else
