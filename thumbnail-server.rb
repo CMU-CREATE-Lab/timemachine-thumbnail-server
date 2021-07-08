@@ -218,13 +218,14 @@ class ThumbnailGenerator
     # We've already added a trailing delim, add UI type without a delim
     if @cgi.params.has_key?('minimalUI')
       @root += "minimalUI=true"
+    elsif @cgi.params.has_key?('legendOnlyUI')
+      @root += "forceLegend=true"
+      @root += "&disableUI=true"
     elsif @cgi.params.has_key?('timestampOnlyUILeft')
       @root += "timestampOnlyUILeft=true"
     elsif @cgi.params.has_key?('timestampOnlyUI')
       @root += "timestampOnlyUI=true"
       @root += '&timestampOnlyUICentered=true'
-    elsif @cgi.params.has_key?('timestampOnlyUILeft')
-      @root += "timestampOnlyUILeft=true"
     else
       @root += "disableUI=true"
     end
