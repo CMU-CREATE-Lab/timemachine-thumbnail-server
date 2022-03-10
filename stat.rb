@@ -57,15 +57,19 @@ class StatInstance
 
     request = Net::HTTP::Post.new(url)
     request.content_type = "application/json"    
-    #request.body = JSON.generate(post_body)
     request.body = post_body.to_json
 
     vlog(0, "request.body #{request.body}")
-    response = http.request(request)
-    
-    if response.code != '200'
-      $stderr.puts "POST to #{url} failed with status code #{response.code} and response #{response.body}"
-      return
+
+    begin
+      response = http.request(request)
+
+      if response.code != '200'
+        $stderr.puts "POST to #{url} failed with status code #{response.code} and response #{response.body}"
+        return
+      end
+    rescue StandardError => error
+      $stderr.puts "POST to #{url} failed: #{error}"
     end
   end
   
