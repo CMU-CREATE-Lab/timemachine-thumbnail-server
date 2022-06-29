@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.7
 
 import cgi, codecs, json, os, re, subprocess, sys, urllib
 
@@ -14,7 +14,7 @@ print('h4 { margin-left: -10px; margin-bottom: 0px; margin-top:2px }')
 print('pre { margin-top: 0px; margin-bottom: 0px }')
 print('</style>')
 
-if os.environ['QUERY_STRING']:
+if 'QUERY_STRING' in os.environ:
     params =  urllib.parse.parse_qs(os.environ['QUERY_STRING'])
 else:
     params = {}
