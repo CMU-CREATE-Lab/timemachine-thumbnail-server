@@ -85,7 +85,10 @@ def parse_bounds(cgi, key)
   bounds
 end
 
-@use_new_api = false
+# Version 0: old ad-hoc API (before actual API)
+# Version 1: first release of API (before reporting version numbers)
+# Version 2: first release of API supporting version number
+$api_version = 0
 
 class ThumbnailGenerator
   def initialize()
@@ -122,19 +125,23 @@ class ThumbnailGenerator
       driver.navigate.to url
       # TODO: actually wait until all the layers are loaded, and then record how long that took
       200.times do |i|
-        ready = driver.execute_script(%{
+        # Return false if not yet ready.  Otherwise, return api version #.
+        api_version = driver.execute_script(%{
           if (window.gFrameGrab) {
-            return window.gFrameGrab.isLoaded() ? 'newApi' : false;
+            if (!window.gFrameGrab.isLoaded()) return false;
+            return window.gFrameGrab.apiVersion || 1; // version 1 if no version is reported
           } else if (window.isEarthTimeLoaded) {
-            return window.isEarthTimeLoaded() ? 'oldApi' : false;
+            if (!window.isEarthTimeLoaded()) return false;
+            return 0; // version 0 is pre-API
           } else {
             return false;
           }
         })
-        vlog(shardno, "#{i}: isLoaded=#{ready}")
-        if ready
-          @use_new_api = ready == "newApi"
-          vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms, use_new_api=#{@use_new_api}")
+        vlog(shardno, "#{i}: isLoaded=#{api_version}")
+        if api_version != false
+          # We're done and have set $api_version;  return
+          $api_version = api_version
+          vlog(shardno, "make_chrome took #{((Time.now - before) * 1000).round} ms, api_version=#{$api_version}")
           return driver
         end
         sleep(0.5)
@@ -282,18 +289,33 @@ class ThumbnailGenerator
       @screenshot_playback_speed = 50.0
     end
 
-    # YYYYMMDD
+    # bt and et could be specified as seconds in playback time, or could be specified as dates in YYYYMMDD[HH[MM[SS]]]
+    # or they could be omitted
+
+    
+    # Find bt, and replace with 0 if not present
     screenshot_begin_time_as_date = root_url_params.has_key?('bt') ? root_url_params['bt'][0] : 0.0
-    # YYYYMMDD
-    screenshot_end_time_as_date = root_url_params.has_key?('et') ? root_url_params['et'][0] : driver.execute_script("return timelapse.getDuration();").to_d.truncate(1).to_f
+    # Find bt, and replace with end playback time (in seconds) if not present
+    if $api_version >= 2
+      screenshot_end_time_as_date = root_url_params.has_key?('et') ? root_url_params['et'][0] : driver.execute_script("return gFrameGrab.getEndPlaybackTime();").to_f
+    else
+      screenshot_end_time_as_date = root_url_params.has_key?('et') ? root_url_params['et'][0] : driver.execute_script("return timelapse.getDuration();").to_d.truncate(1).to_f
+    end
 
     $debug << "screenshot_playback_speed: #{@screenshot_playback_speed}<br>"
     $debug << "screenshot_begin_time_as_date #{screenshot_begin_time_as_date}<br>"
     $debug << "screenshot_end_time_as_date #{screenshot_end_time_as_date}<br>"
 
-    @screenshot_begin_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_begin_time_as_date}')").to_f
-    @screenshot_end_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_end_time_as_date}')").to_f
-
+    # Call api to parse begin/end times in case they are in YYYYMMDD[HH[MM[SS]]] format.  (Will pass through unchanged if already in seconds of playback time)
+    if $api_version >= 2
+      @screenshot_begin_time_as_render_time = driver.execute_script("return gFrameGrab.getPlaybackTimeFromStringDate('#{screenshot_begin_time_as_date}')").to_f
+      @screenshot_end_time_as_render_time = driver.execute_script("return gFrameGrab.getPlaybackTimeFromStringDate('#{screenshot_end_time_as_date}')").to_f
+      vlog(0, "getPlaybackTimeFromStringDate #{screenshot_begin_time_as_date} -> #{@screenshot_begin_time_as_render_time}")
+      vlog(0, "getPlaybackTimeFromStringDate #{screenshot_end_time_as_date} -> #{@screenshot_end_time_as_render_time}")
+    else
+      @screenshot_begin_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_begin_time_as_date}')").to_f
+      @screenshot_end_time_as_render_time = driver.execute_script("return timelapse.playbackTimeFromShareDate('#{screenshot_end_time_as_date}')").to_f
+    end
 
     $debug << "screenshot_begin_time_as_render_time: #{@screenshot_begin_time_as_render_time}<br>"
     $debug << "screenshot_end_time_as_render_time: #{@screenshot_end_time_as_render_time}<br>"
@@ -432,7 +454,7 @@ class ThumbnailGenerator
                 driver = nil
                 break
               end
-              if @use_new_api
+              if $api_version >= 1
                 frame_state = {"bounds"=>@screenshot_bounds, "seek_time"=>seek_time}
                 framegrab_info = driver.execute_script(
                   "return gFrameGrab.captureFrame(#{frame_state.to_json});"
@@ -517,7 +539,7 @@ class ThumbnailGenerator
       $stats['videoFrameCount'] = @nframes
       $stats['frameEfficiency'] = @nframes.to_f / total_chrome_frames
       vlog(0, "CHECKPOINTTHUMBNAIL CHROMEFINISHED #{JSON.generate($stats)}")
-    rescue Selenium::WebDriver::Error::TimeOutError
+    rescue Selenium::WebDriver::Error::TimeoutError
       raise "Error taking screenshot. Data failed to load."
     end
     if @semaphore
