@@ -655,7 +655,7 @@ class ThumbnailGenerator
       end
 
       label += ","
-      label += "drawtext=fontfile=./DroidSans.ttf:fontsize=#{label_size}:fontcolor=#{label_color}:x=#{label_x_pos}:y=#{label_y_pos}"
+      label += "drawtext=fontfile=./fonts/DroidSans.ttf:fontsize=#{label_size}:fontcolor=#{label_color}:x=#{label_x_pos}:y=#{label_y_pos}"
 
       # If we do not have enough labels to cover every frame, ensure that the last label is blank to prevent ffmpeg from
       # repeating the last available label across the remaining frames
@@ -681,6 +681,14 @@ class ThumbnailGenerator
       # number of characters that Windows allows via the commandline, but more generally, because this list can get very long
       # no matter the OS and escaping special chars/spaces in both ffmpeg and ruby-land is also a bit of a nightmare.
       File.open(frame_label_cmd_file, 'w') { |file| file.write(label_cmds) } if frame_labels.length > 1
+    end
+
+    # TODO: Add watermarkAttributes param to allow for style customization
+    # TODO: The -18 in height for every new row is dependent on the font and font size
+    if @cgi.params.has_key? 'watermark'
+      @cgi.params['watermark'][0].split("|").each_with_index do |text_line, idx|
+        label += ",drawtext=fontfile=./fonts/WorkSans-Bold.ttf:text='#{text_line}':fontsize=14:fontcolor=white@0.25:borderw=1:bordercolor=black@0.20:x=w-tw-4:y=h-th-4-#{idx*18}"
+      end
     end
 
     start_dwell_in_sec = @cgi.params['startDwell'][0].to_f
