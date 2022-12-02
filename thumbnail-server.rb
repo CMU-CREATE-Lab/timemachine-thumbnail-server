@@ -687,7 +687,7 @@ class ThumbnailGenerator
     # TODO: The -18 in height for every new row is dependent on the font and font size
     if @cgi.params.has_key? 'watermark'
       @cgi.params['watermark'][0].split("|").each_with_index do |text_line, idx|
-        label += ",drawtext=fontfile=./fonts/WorkSans-Bold.ttf:text='#{text_line}':fontsize=14:fontcolor=white@0.25:borderw=1:bordercolor=black@0.20:x=w-tw-4:y=h-th-4-#{idx*18}"
+        label += ",drawtext=fontfile=./fonts/WorkSans-Bold.ttf:text='#{text_line}':fontsize=14:fontcolor=white@0.30:borderw=1:bordercolor=black@0.25:x=w-tw-4:y=h-th-4-#{idx*18}"
       end
     end
 
