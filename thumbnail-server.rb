@@ -503,7 +503,7 @@ class ThumbnailGenerator
           end
           vlog(shardno, "Shard finished");
           if driver then
-            total_chrome_frames += driver.execute_script("return timelapse.frameno")
+            total_chrome_frames += driver.execute_script("return timelapse.frameno || 1")
             driver.quit
           end
         }
@@ -1007,6 +1007,7 @@ class ThumbnailGenerator
       start_frame = start_frame.to_i
       frame_time = start_frame * dataset_frame_length
     else
+      vlog(0, "About to compute start_frame #{frame_time} #{dataset_frame_length}" )
       start_frame = (frame_time / dataset_frame_length).floor
     end
 
