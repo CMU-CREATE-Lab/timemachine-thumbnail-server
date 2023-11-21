@@ -21,6 +21,14 @@ Timeout 3600
 <If "%{THE_REQUEST} =~ /debug/">
   Header set Content-Type "text/html"
 </If>
+<ElseIf "%{QUERY_STRING} =~ /legendHTML=true/">
+  Header set Content-Type "application/json"
+  Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
+</ElseIf>
+<ElseIf "%{QUERY_STRING} =~ /asJson=true/">
+  Header set Content-Type "application/json"
+  Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
+</ElseIf>
 <ElseIf "%{QUERY_STRING} =~ /format=jpg/">
   Header set Content-Type "image/jpeg"
   Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
@@ -41,7 +49,7 @@ Timeout 3600
   Header set Content-Type "video/webm"
   Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
 </ElseIf>
-<ElseIf "%{QUERY_STRING} =~ /legendHTML=true/">
+<ElseIf "%{QUERY_STRING} =~ /format=json/">
   Header set Content-Type "application/json"
   Header set Content-Type "text/html" "expr=%{REQUEST_STATUS} == 400"
 </ElseIf>

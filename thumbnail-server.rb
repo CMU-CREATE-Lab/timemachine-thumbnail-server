@@ -463,10 +463,10 @@ class ThumbnailGenerator
                 after_time = framegrab_info['after_time']
                 before_frameno = framegrab_info['before_frameno']
                 frameno = framegrab_info['frameno']
-                aux_info = framegrab_info['aux_info']
+                @aux_info = framegrab_info['aux_info']
                 vlog(shardno, "complete=#{complete} seek_time=#{seek_time} after_time=#{after_time} before_frameno=#{before_frameno} frameno=#{frameno}")
-                if aux_info
-                  vlog(shardno, "aux_info: #{aux_info}")
+                if @aux_info
+                  vlog(shardno, "aux_info: #{@aux_info}")
                 end
               else
                 (complete, after_time, before_frameno, frameno) = driver.execute_script(
@@ -481,7 +481,6 @@ class ThumbnailGenerator
               end
               if complete
                 if @legendHTML
-                  #@legendContent = driver.execute_script("return {x:3};")
                   @legendContent = driver.execute_script(%Q(
                     return {
                       HTML: getLegendHTML(),
@@ -1118,6 +1117,7 @@ class ThumbnailGenerator
       $debug << "root: #{@root}<br>"
 
       @format = @cgi.params['format'][0] || 'jpg'
+      @output_as_json = @cgi.params['asJson'][0] == "true" ? true : false
 
       @tile_format = @cgi.params['tileFormat'][0] || 'webm'
 
@@ -1138,6 +1138,23 @@ class ThumbnailGenerator
         cache_file = "#{@cache_dir}#{cache_path}"
 
         FileUtils.mkdir_p(File.dirname(cache_file))
+
+        if @output_as_json
+          # At this point, cache_file is the path to the json metadata that will be returned. We need to also have a cache path to the actual thumbnail itself
+
+          # This is gross.
+          # Apache already adds a slash to the encoded URL every 80 chars (see apache-serve.include). We need to undo this, remove the &asJson=true parameter and reapply the slashes.
+          # We need this new path to use for saving the actual thumbnail data below.
+          cache_path_substr = cache_path.match(/root=(.*)/)[0]
+          cache_path_substr.gsub!("/", "")
+          cache_path_substr.gsub!("026asJson=true", "")
+          cache_path_substr = cache_path_substr.scan(/.{80}|.+/).join("/")
+          cache_path2 = "/thumbnail/" + cache_path_substr
+
+          # Actual thumbnail data (img, video, etc). We need to save this separately, since above we are saving a json file and here we are actually saving the thumbnail data itself.
+          cache_file2 = "#{@cache_dir}#{cache_path2}"
+          FileUtils.mkdir_p(File.dirname(cache_file2))
+        end
       else
         # Running from commandline;  don't cache
         cache_file = nil
@@ -1157,7 +1174,7 @@ class ThumbnailGenerator
 
       # Loop
       #   If thumbnail is in cache use it, done
-      #   Create and attempt to (non-blocking) acquire lock on <cachepath>.computing
+      #   Create and attempt to (non-blocking) acquire lock on <cachepath>.compute
       #   Acquired? break from loop
 
       @from_screenshot = @cgi.params.has_key?('fromScreenshot')
@@ -1165,6 +1182,9 @@ class ThumbnailGenerator
 
       if cache_file
         compute_path = cache_file + '.compute'
+        if @output_as_json
+          compute_path2 = cache_file2 + '.compute'
+        end
         compute_file = nil
 
         while true
@@ -1181,18 +1201,15 @@ class ThumbnailGenerator
           end
 
           compute_file = File.open(compute_path, 'w')
+          if @output_as_json
+            compute_file2 = File.open(compute_path2, 'w')
+          end
           if not compute_file.flock(File::LOCK_NB | File::LOCK_EX)
             vlog(0, "Cannot lock compute lockfile; waiting for another process to finish computing")
             sleep(1)
             compute_file.close
             compute_file = nil
           end
-        end
-
-        if image_data and compute_file
-          compute_file.close
-          compute_file = nil
-          FileUtils.rm_f(compute_path)
         end
       end
 
@@ -1231,8 +1248,17 @@ class ThumbnailGenerator
                   details: "<a href=\"#{$status_url}\">More info</a>")
         Stat.up("Last thumbnail successful")
         if cache_file
-          File.rename @tmpfile, cache_file
-          vlog(0, "Moved output file to cache: #{cache_file}")
+          final_file = cache_file
+          if @output_as_json
+            # JSON that contains the thumbnail capture bounds, url to the thumbnail, which host did the capturing, etc.
+            # We save it using the original URL path, that includes the &asJson=true parameter.
+            thumbnail_request_url = $request_url.gsub("&asJson=true", "")
+            json_data = JSON.pretty_generate({"thumbnail-capture-bounds" => @aux_info['lat_lon_capture_bounds'], "thumbnail-url" => thumbnail_request_url, "thumbnail-worker-hostname" => thumbnail_worker_hostname})
+            File.open(cache_file, 'w') { |file| file.write(json_data) }
+            final_file = cache_file2
+          end
+          File.rename @tmpfile, final_file
+          vlog(0, "Moved output file to cache: #{final_file}")
         else
           vlog(0, "Deleted output file");
           File.unlink @tmpfile
@@ -1243,6 +1269,17 @@ class ThumbnailGenerator
           FileUtils.rm_rf(@tmpfile_screenshot_input_path)
           if @format == 'zip'
             FileUtils.rm_rf(@tmpfile_zip_dir)
+          end
+        end
+
+        if image_data and compute_file
+          compute_file.close
+          compute_file = nil
+          FileUtils.rm_f(compute_path)
+          if @output_as_json
+            compute_file2.close
+            compute_file2 = nil
+            FileUtils.rm_f(compute_path2)
           end
         end
 
@@ -1268,7 +1305,9 @@ class ThumbnailGenerator
         }
         mime_type = mime_types[@format] || 'application/octet-stream'
 
-        if (ENV['HTTP_RANGE'])
+        if @output_as_json
+          @cgi.out('type' => 'application/json') {json_data}
+        elsif (ENV['HTTP_RANGE'])
           size = File.size(cache_file)
           bytes = Rack::Utils.get_byte_ranges(ENV['HTTP_RANGE'], size)[0]
           offset = bytes.begin

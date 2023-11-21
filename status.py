@@ -115,9 +115,10 @@ for id in reversed(ids[-num_thumbnails:]):
             completion_status_msg.append('Took %.1f seconds<br>' % (stats['totalTimeSecs']))
         if 'frameEfficiency' in stats:
             completion_status_msg.append('Frame efficiency %.1f%%<br>' % (stats['frameEfficiency'] * 100))
-            
         if 'recompute' in url:
             completion_status_msg.append('WARNING, RECOMPUTE TAG, DO NOT FOLLOW THIS LINK: %s<br>' % url)
+        elif 'asJson' in url:
+            completion_status_msg.append('<a href="%s">json link</a><br>' % url)
         elif queryparams['format'][0] == 'zip':
             pass
         elif queryparams['format'][0] == 'mp4':
