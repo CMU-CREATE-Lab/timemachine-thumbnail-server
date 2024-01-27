@@ -1,6 +1,6 @@
-#!/usr/bin/env python3.7
+#!/usr/bin/env python3
 
-import cgi, codecs, json, os, re, subprocess, sys, urllib
+import codecs, json, os, re, subprocess, sys, urllib.parse, html
 
 sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
 
@@ -124,19 +124,19 @@ for id in reversed(ids[-num_thumbnails:]):
         elif queryparams['format'][0] == 'mp4':
             completion_status_msg.append('<a href="%s"><video src="%s" autoplay loop muted style="max-height:300px"></video><br>link</a><br>' % (url, url))
         else:
-            completion_status_msg.append('<a href="%s"><img src="%s" style="max-height:300px"><br>link</a><br>' % (url, cgi.escape(url)))
+            completion_status_msg.append('<a href="%s"><img src="%s" style="max-height:300px"><br>link</a><br>' % (url, html.escape(url)))
     else:
         pid = id.split(':')[0]
         if 'FATALERROR' in stats:
             completion_status = 'Failed'
             completion_color = '#ff5555'
-            completion_status_msg.append('%s<br>' % cgi.escape(url))
+            completion_status_msg.append('%s<br>' % html.escape(url))
             stats['FATALERROR'] = stats['FATALERROR'][0:1000]
-            completion_status_msg.append('<h4>Fatal error</h4>\n<pre>%s</pre>\n' % cgi.escape(stats['FATALERROR']))
+            completion_status_msg.append('<h4>Fatal error</h4>\n<pre>%s</pre>\n' % html.escape(stats['FATALERROR']))
         else:
             completion_status = 'In progress'
             completion_color = '#ffff55'
-            completion_status_msg.append('%s<br>' % cgi.escape(url))
+            completion_status_msg.append('%s<br>' % html.escape(url))
             if not os.path.exists('/proc/%s' % pid):
                 completion_status_msg.append('(pid %s seems not to exist; maybe done now?)<br>' % pid)
                 
@@ -144,8 +144,8 @@ for id in reversed(ids[-num_thumbnails:]):
             completion_status_msg.append('<code>%s</code><br>' % thumbs[id]['Need'])
 
         if 'CHECKPOINTTHUMBNAIL' in thumbs[id]:
-            completion_status_msg.append('<h4>Last checkpoint</h4><code>%s</code><br>' % cgi.escape(thumbs[id]['CHECKPOINTTHUMBNAIL'][0:500]))
-        completion_status_msg.append('<h4>Last line</h4><code>%s</code><br>' % cgi.escape(thumbs[id]['last'][0:500]))
+            completion_status_msg.append('<h4>Last checkpoint</h4><code>%s</code><br>' % html.escape(thumbs[id]['CHECKPOINTTHUMBNAIL'][0:500]))
+        completion_status_msg.append('<h4>Last line</h4><code>%s</code><br>' % html.escape(thumbs[id]['last'][0:500]))
 
     print('<h3 style="background-color:%s">%s <a href="status?id=%s">thumbnail %s</a> %s %s</h3>' %
           (completion_color, completion_status, id, id, tokens[0], tokens[1].split('.')[0]))
@@ -167,17 +167,17 @@ for id in reversed(ids[-num_thumbnails:]):
     if request:
         print(request)
         
-    print('<h4>Root</h4>\n%s<br>\n' % cgi.escape(queryparams['root'][0]))
+    print('<h4>Root</h4>\n%s<br>\n' % html.escape(queryparams['root'][0]))
         
     if 'delegatedTo' in stats:
-        print('<h4>Delegated to</h4>\n%s<br>\n' % cgi.escape(stats['delegatedTo']))
+        print('<h4>Delegated to</h4>\n%s<br>\n' % html.escape(stats['delegatedTo']))
 
     print('<h4>Raw stats</h4>')
     if stats:
-        print('<code>%s</code><br>' % cgi.escape(json.dumps(stats)))
+        print('<code>%s</code><br>' % html.escape(json.dumps(stats)))
     print('<code>More: grep %s %s</code><br>' % (':'.join(id.split(':')[0:2]), logfile_path))
     if show_id:
         print('<h4>Full log</h4>')
-        print('<pre>%s</pre><br>' % cgi.escape(''.join(all_lines)))
+        print('<pre>%s</pre><br>' % html.escape(''.join(all_lines)))
 
 print(header_footer)
