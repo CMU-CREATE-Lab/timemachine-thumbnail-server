@@ -39,6 +39,7 @@ load File.dirname(File.realpath(__FILE__)) + '/stat.rb'
 filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 
 $ffmpeg_path = '/usr/local/bin/ffmpeg'
+$graphics_magick_path = '/usr/bin/gm convert'
 $num_threads = 8
 
 config_path = File.dirname(File.realpath(__FILE__)) + '/config.json'
@@ -292,7 +293,7 @@ class ThumbnailGenerator
     # bt and et could be specified as seconds in playback time, or could be specified as dates in YYYYMMDD[HH[MM[SS]]]
     # or they could be omitted
 
-    
+
     # Find bt, and replace with 0 if not present
     screenshot_begin_time_as_date = root_url_params.has_key?('bt') ? root_url_params['bt'][0] : 0.0
     # Find bt, and replace with end playback time (in seconds) if not present
@@ -757,7 +758,7 @@ class ThumbnailGenerator
       else
         delay = 20 # default 5 fps
       end
-      cmd += " -f image2pipe -vcodec ppm - | /usr/local/bin/gm convert -delay #{delay} -loop 0 - "
+      cmd += " -f image2pipe -vcodec ppm - | #{$graphics_magick_path} -delay #{delay} -loop 0 - "
     end
 
     #
@@ -785,7 +786,7 @@ class ThumbnailGenerator
     #
     #
     if collapse
-      cmd += " -f image2pipe -vcodec ppm - | /usr/local/bin/gm convert -evaluate-sequence min - "
+      cmd += " -f image2pipe -vcodec ppm - | #{$graphics_magick_path} -evaluate-sequence min - "
     end
 
     if @format != 'zip'
