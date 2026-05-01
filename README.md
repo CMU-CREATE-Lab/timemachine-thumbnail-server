@@ -140,3 +140,17 @@ If you want to install your own copy of the thumbnail server:
 
 If you're developing on a Mac, you can run this under apache on your mac; look at apache-config-examples/osx-rsargent.conf and follow the comments at the top of that file to customize and install.
 
+### Python virtual environment
+
+Some components (notably the `timemachine-video-export` subdirectory) require a Python environment.  To set one up, make sure `python3.12` is on your `PATH` and run:
+
+```bash
+./setup-venv.sh
+```
+
+This creates `venv/` in the repo root, installs `timemachine-video-export/requirements.txt`, and installs the `timemachine-video-export` package itself.  Activate the environment with:
+
+```bash
+source venv/bin/activate
+```
+
