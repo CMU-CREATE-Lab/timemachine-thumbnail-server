@@ -27,6 +27,7 @@ require 'fileutils'
 require 'bigdecimal'
 require 'bigdecimal/util'
 require 'net/http'
+require 'open3'
 require 'selenium-webdriver'
 require 'rack'
 
@@ -40,6 +41,7 @@ filter_dir = File.dirname(File.realpath(__FILE__)) + '/filters'
 
 $ffmpeg_path = '/usr/local/bin/ffmpeg'
 $graphics_magick_path = '/usr/bin/gm convert'
+$breathecam_export_path = File.dirname(File.realpath(__FILE__)) + '/venv/bin/breathecam-thumbnail-export'
 $num_threads = 8
 
 config_path = File.dirname(File.realpath(__FILE__)) + '/config.json'
@@ -636,12 +638,18 @@ class ThumbnailGenerator
       label_y_pos = (label_attributes[3] and !label_attributes[3].empty? and (label_attributes[3].to_i.to_s == label_attributes[3]) and label_attributes[3] != 'null') ? label_attributes[3] : "12" # really should be 10, but visually 12 appears better
 
       if @cgi.params.has_key? 'labelsFromDataset'
-        frame_labels = @tm['capture-times']
-        raise "Capture times are missing for this dataset" if !frame_labels or frame_labels.empty?
-        starting_index = ((@time - @leader_seconds) * @dataset_fps)
-        # Truncate to 3 decimal places then take the ceiling
-        starting_index = ((starting_index * 1000).floor / 1000.0).ceil
-        frame_labels = frame_labels[starting_index, @nframes]
+        if @from_export
+          frame_indices = @export_meta['render']['frame_indices']
+          capture_times = @export_meta['timemachine']['capture_times']
+          frame_labels = frame_indices.map { |i| capture_times[i] }
+        else
+          frame_labels = @tm['capture-times']
+          raise "Capture times are missing for this dataset" if !frame_labels or frame_labels.empty?
+          starting_index = ((@time - @leader_seconds) * @dataset_fps)
+          # Truncate to 3 decimal places then take the ceiling
+          starting_index = ((starting_index * 1000).floor / 1000.0).ceil
+          frame_labels = frame_labels[starting_index, @nframes]
+        end
         # Auto fit font if the user does not directly specify a size
         if (label_attributes[1].nil? || label_attributes[1].empty? || label_attributes[1] == 'null')
           # output file width - margins (i.e. left margin and always 20 margin on the right)
@@ -703,7 +711,9 @@ class ThumbnailGenerator
     end_loop_frame = @nframes + num_start_loop_frames - 1
 
     input_filters = ""
-    if @from_screenshot
+    if @from_export
+      input_src = "-f rawvideo -pixel_format rgb24 -video_size #{@output_width}x#{@output_height} -framerate #{@desired_fps} -i pipe:0"
+    elsif @from_screenshot
       input_src = "-f image2 -start_number 0 -i \"#{@tmpfile_screenshot_input_path}/%04d.png\" "
     else
       input_src = "-ss #{sprintf('%.3f', @time)} -i #{@tile_url} -vframes #{@nframes}"
@@ -794,12 +804,16 @@ class ThumbnailGenerator
     end
 
     $debug << "Running: '#{cmd}'<br>"
-    output = `#{cmd} 2>&1`;
+    if @from_export
+      run_export_ffmpeg(cmd)
+    else
+      output = `#{cmd} 2>&1`;
 
-    if not $?.success?
-      $debug << "ffmpeg failed with output:<br>"
-      $debug << "<pre>#{output}</pre>"
-      raise "Error executing '#{cmd}'"
+      if not $?.success?
+        $debug << "ffmpeg failed with output:<br>"
+        $debug << "<pre>#{output}</pre>"
+        raise "Error executing '#{cmd}'"
+      end
     end
 
     #
@@ -839,7 +853,155 @@ class ThumbnailGenerator
   end
 
 
+  def compute_thumbnail_from_export()
+    # Apply the same URL hex-decoding that start_thumbnail_from_screenshot does, in case
+    # we got @root through Apache's encoding scheme.
+    @root.gsub!("03D", "=")
+    @root.gsub!("02C", ",")
+    @root.scan(/026\w+=/).each do |m|
+      @root.gsub!(m, m.gsub("026", "&"))
+    end
+    @root.scan(/023\w+=/).each do |m|
+      @root.gsub!(m, m.gsub("023", "#"))
+    end
+    vlog(0, "fromExport root #{@root}")
+
+    cgi_width = @cgi.params['width'][0]
+    cgi_height = @cgi.params['height'][0]
+
+    cmd = [$breathecam_export_path, @root]
+    if cgi_width and !cgi_width.empty? and cgi_height and !cgi_height.empty?
+      w = cgi_width.to_i
+      h = cgi_height.to_i
+      if w <= 0 or h <= 0 or w.odd? or h.odd?
+        raise "fromExport requires positive even width and height; got #{cgi_width}x#{cgi_height}"
+      end
+      cmd += ['--size', "#{w}x#{h}"]
+    elsif (cgi_width and !cgi_width.empty?) or (cgi_height and !cgi_height.empty?)
+      raise "fromExport requires both width and height, or neither (got width=#{cgi_width.inspect} height=#{cgi_height.inspect})"
+    end
+    cmd += ['-o', '-']
+
+    vlog(0, "Spawning exporter: #{cmd.inspect}")
+    py_in, py_out, py_err, py_thr = Open3.popen3(*cmd)
+    py_in.close
+    py_out.binmode
+
+    # Drain stderr in a background thread; log inline.
+    py_stderr_buf = []
+    py_err_thread = Thread.new {
+      py_err.each_line { |l|
+        py_stderr_buf << l
+        vlog(0, "exporter: #{l.chomp}")
+      }
+    }
+
+    # First line of stdout is an ASCII-only JSON header.
+    header_line = py_out.gets
+    if header_line.nil?
+      py_err_thread.join
+      py_status = py_thr.value
+      raise "exporter exited (#{py_status.exitstatus}) before emitting header: #{py_stderr_buf.join}"
+    end
+    @export_meta = JSON.parse(header_line)
+    render = @export_meta['render']
+    vlog(0, "exporter meta: nframes=#{render['nframes']} #{render['output_width']}x#{render['output_height']}")
+    $stats['exportNframes'] = render['nframes']
+    $stats['exportWidth'] = render['output_width']
+    $stats['exportHeight'] = render['output_height']
+
+    @nframes = render['nframes']
+    @output_width = render['output_width']
+    @output_height = render['output_height']
+
+    @is_video = (@format == 'mp4' or @format == 'webm' or @format == 'zip') ? true : false
+    @raw_formats = ['rgb24', 'gray8']
+    @is_image = !(@raw_formats.include?(@format) or @format == 'gif' or @is_video)
+    if @is_image and @nframes != 1 and not @cgi.params.has_key?('collapse')
+      raise "fromExport produced #{@nframes} frames but format=#{@format} expects a single frame; pass 'collapse' to fold them"
+    end
+
+    if @cgi.params.has_key?('fps') and @cgi.params['fps'][0] and !@cgi.params['fps'][0].empty?
+      @desired_fps = @cgi.params['fps'][0].to_f
+    else
+      @desired_fps = @export_meta['thumbnail']['fps'].to_f
+    end
+    @desired_fps = 1.0 if @desired_fps <= 0
+    # Input framerate is set inline in input_src for fromExport, leave @video_output_fps blank.
+    @video_output_fps = ""
+
+    # Plumbed into encode_frames when @from_export is true.
+    @export_pixel_stream = py_out
+    @export_stderr_buf = py_stderr_buf
+
+    encode_succeeded = false
+    begin
+      encode_frames()
+      encode_succeeded = true
+    ensure
+      if encode_succeeded
+        py_out.close unless py_out.closed?
+        py_err_thread.join
+        py_status = py_thr.value
+        unless py_status.success?
+          raise "exporter failed (exit #{py_status.exitstatus}): #{py_stderr_buf.join}"
+        end
+      else
+        # encode_frames is raising; tear down the exporter so we don't leak it.
+        begin
+          Process.kill('TERM', py_thr.pid) if py_thr.alive?
+        rescue Errno::ESRCH
+        end
+        py_out.close rescue nil
+        py_err_thread.join rescue nil
+        py_thr.join rescue nil
+      end
+    end
+  end
+
+  def run_export_ffmpeg(cmd)
+    # Spawns ffmpeg through a shell so trailing pipes (gif/zip/collapse/filter) still work,
+    # then streams the exporter's RGB stdout into ffmpeg's stdin.
+    ff_in, ff_out, ff_err, ff_thr = Open3.popen3('sh', '-c', cmd)
+    ff_out.close
+
+    pump_err = nil
+    pump_thread = Thread.new {
+      begin
+        IO.copy_stream(@export_pixel_stream, ff_in)
+      rescue => e
+        pump_err = e
+      ensure
+        ff_in.close rescue nil
+      end
+    }
+
+    ff_stderr_buf = []
+    ff_err_thread = Thread.new {
+      ff_err.each_line { |l| ff_stderr_buf << l }
+    }
+
+    pump_thread.join
+    ff_status = ff_thr.value
+    ff_err_thread.join
+
+    unless ff_status.success?
+      output = ff_stderr_buf.join
+      $debug << "ffmpeg failed with output:<br>"
+      $debug << "<pre>#{output}</pre>"
+      raise "Error executing '#{cmd}': #{output}"
+    end
+    if pump_err
+      raise "Error streaming exporter output to ffmpeg: #{pump_err}"
+    end
+  end
+
   def compute_thumbnail()
+    if @from_export
+      compute_thumbnail_from_export()
+      return
+    end
+
     @boundsNWSE = parse_bounds(@cgi, 'boundsNWSE')
     @boundsLTRB = parse_bounds(@cgi, 'boundsLTRB')
     if !@boundsNWSE and !@boundsLTRB
@@ -1180,6 +1342,19 @@ class ThumbnailGenerator
       #   Acquired? break from loop
 
       @from_screenshot = @cgi.params.has_key?('fromScreenshot')
+      @from_export = @cgi.params.has_key?('fromExport')
+      if @from_export and @from_screenshot
+        raise "Cannot specify both fromScreenshot and fromExport"
+      end
+      # Auto-route Breathecam root URLs through the export path unless the caller
+      # explicitly opted into screenshot/chrome rendering.
+      if !@from_export and !@from_screenshot
+        root_host = (URI.parse(@root).host rescue nil)
+        if root_host and root_host.end_with?("breathecam.org")
+          @from_export = true
+          vlog(0, "Auto-detected breathecam.org root; routing to fromExport path")
+        end
+      end
       image_data = nil
 
       if cache_file
