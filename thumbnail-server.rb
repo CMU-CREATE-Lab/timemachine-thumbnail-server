@@ -1343,17 +1343,18 @@ class ThumbnailGenerator
 
       @from_screenshot = @cgi.params.has_key?('fromScreenshot')
       @from_export = @cgi.params.has_key?('fromExport')
-      if @from_export and @from_screenshot
-        raise "Cannot specify both fromScreenshot and fromExport"
-      end
-      # Auto-route Breathecam root URLs through the export path unless the caller
-      # explicitly opted into screenshot/chrome rendering.
-      if !@from_export and !@from_screenshot
-        root_host = (URI.parse(@root).host rescue nil)
-        if root_host and root_host.end_with?("breathecam.org")
-          @from_export = true
-          vlog(0, "Auto-detected breathecam.org root; routing to fromExport path")
+      # Breathecam root URLs always go through the export path, regardless of any
+      # legacy fromScreenshot flag in the caller's URL.
+      root_host = (URI.parse(@root).host rescue nil)
+      if root_host and root_host.end_with?("breathecam.org")
+        if @from_screenshot
+          vlog(0, "Ignoring fromScreenshot for breathecam.org root; using export path")
+          @from_screenshot = false
         end
+        @from_export = true
+        vlog(0, "Auto-detected breathecam.org root; routing to fromExport path")
+      elsif @from_export and @from_screenshot
+        raise "Cannot specify both fromScreenshot and fromExport"
       end
       image_data = nil
 
