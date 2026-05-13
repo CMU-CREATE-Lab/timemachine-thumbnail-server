@@ -906,13 +906,21 @@ class ThumbnailGenerator
     @export_meta = JSON.parse(header_line)
     render = @export_meta['render']
     vlog(0, "exporter meta: nframes=#{render['nframes']} #{render['output_width']}x#{render['output_height']}")
-    $stats['exportNframes'] = render['nframes']
-    $stats['exportWidth'] = render['output_width']
-    $stats['exportHeight'] = render['output_height']
+    # Group all fields produced by breathecam-thumbnail-export under one key
+    # so they're easy to identify in the raw-stats log. We merge the trailer's
+    # per-stage timing stats into this same hash after encode_frames returns.
+    $stats['breathecamExport'] = {
+      'nframes'       => render['nframes'],
+      'output_width'  => render['output_width'],
+      'output_height' => render['output_height'],
+    }
 
     @nframes = render['nframes']
     @output_width = render['output_width']
     @output_height = render['output_height']
+    # Cap the pixel-stream copy at exactly this many bytes so the trailing
+    # stats JSON line never gets piped into ffmpeg.
+    @export_total_pixel_bytes = render['total_pixel_bytes']
 
     @is_video = (@format == 'mp4' or @format == 'webm' or @format == 'zip') ? true : false
     @raw_formats = ['rgb24', 'gray8']
@@ -937,6 +945,21 @@ class ThumbnailGenerator
     encode_succeeded = false
     begin
       encode_frames()
+      # Trailing line on the exporter's stdout: one JSON object {"stats": {...}}
+      # with per-stage timing. Read before closing py_out so we can fold the
+      # numbers into our request log.
+      trailer_line = py_out.gets
+      if trailer_line and !trailer_line.strip.empty?
+        begin
+          trailer = JSON.parse(trailer_line)
+          if trailer['stats']
+            $stats['breathecamExport'].merge!(trailer['stats'])
+            vlog(0, "exporter stats: #{trailer['stats'].to_json}")
+          end
+        rescue JSON::ParserError => e
+          vlog(0, "exporter trailer not valid JSON (#{e.message}): #{trailer_line.inspect}")
+        end
+      end
       encode_succeeded = true
     ensure
       if encode_succeeded
@@ -968,7 +991,9 @@ class ThumbnailGenerator
     pump_err = nil
     pump_thread = Thread.new {
       begin
-        IO.copy_stream(@export_pixel_stream, ff_in)
+        # Bounded copy so the exporter's trailing JSON line stays on its
+        # stdout for us to consume after encode_frames returns.
+        IO.copy_stream(@export_pixel_stream, ff_in, @export_total_pixel_bytes)
       rescue => e
         pump_err = e
       ensure
