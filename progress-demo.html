@@ -52,7 +52,10 @@ const rawEl    = document.getElementById('raw');
 const outEl    = document.getElementById('output');
 
 function render(data) {
-  stateEl.textContent = data.state || 'unknown';
+  // The poller knows the /thumbnail request is in flight, so a raw "unknown"
+  // (returned by /progress before the worker has written .progress yet) is
+  // friendlier surfaced as "Not yet started".
+  stateEl.textContent = (data.state && data.state !== 'unknown') ? data.state : 'Not yet started';
   stateEl.className = 'state ' + (data.state || '');
   if (data.frames_total) {
     framesEl.textContent = `${data.frames_done || 0} / ${data.frames_total}`;
@@ -77,7 +80,7 @@ async function pollLoop(progressUrl, stopWhenDone) {
     } catch (e) {
       rawEl.textContent = `poll error: ${e}`;
     }
-    await new Promise(res => setTimeout(res, 500));
+    await new Promise(res => setTimeout(res, 1000));
   }
 }
 

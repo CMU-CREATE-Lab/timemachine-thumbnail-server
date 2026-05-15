@@ -465,6 +465,14 @@ class ThumbnailGenerator
         raise "Too many frames to compute #{@nframes}"
       end
 
+      write_progress(state: 'rendering', frames_total: @nframes)
+
+      # Per-frame progress counter shared across shards. write_progress is
+      # safe to call concurrently (atomic rename + throttled), but the
+      # counter itself needs a lock so we don't drop updates.
+      frames_done = 0
+      frames_done_mutex = Mutex.new
+
       frame_queue = Queue.new
       (0 ... @nframes).each { |i| frame_queue << i }
 
@@ -543,6 +551,8 @@ class ThumbnailGenerator
                   vlog(shardno, "size of screenshot is #{File.size(screenshot_path)}")
                 end
                 vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms (chrome frame #{frameno})");
+                n_done = frames_done_mutex.synchronize { frames_done += 1 }
+                write_progress(frames_done: n_done)
                 break
               else
                 vlog(shardno, "frame #{frame} called update but not ready yet (chrome frame #{frameno})")
