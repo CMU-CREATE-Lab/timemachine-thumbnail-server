@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Thumbnail progress demo</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 64rem }
+textarea { width: 100%; min-height: 5rem; font-family: monospace; font-size: 12px }
+.bar { height: 1rem; background: #eee; border-radius: 4px; overflow: hidden; margin: .5rem 0 }
+.bar > div { height: 100%; background: #4caf50; transition: width .2s linear }
+pre { background: #f5f5f5; padding: .75rem; border-radius: 4px; white-space: pre-wrap; word-break: break-all; font-size: 12px }
+.state { font-weight: 600 }
+.state.error { color: #c62828 }
+.state.done  { color: #2e7d32 }
+button { padding: .4rem .8rem; font-size: 14px }
+</style>
+</head>
+<body>
+
+<h1>Thumbnail progress demo</h1>
+
+<p>Paste a thumbnail URL (one served by this host's <code>/thumbnail</code> endpoint).
+We rewrite its path to <code>/progress</code>, preserving the query string, and poll
+that for state every 500&nbsp;ms while the main request runs.</p>
+
+<textarea id="url" spellcheck="false">https://thumbnails-rsargent.createlab.org/thumbnail?root=https%3A//breathecam.org/%23v%3D100%2C100%2C800%2C500%2Cpts%26t%3D0%26bt%3D20260514140000%26et%3D20260514140030%26d%3D2026-05-14%26s%3Dclairton4%26fps%3D10&format=mp4&recompute</textarea>
+<p><button id="go">Start</button></p>
+
+<h3>Progress</h3>
+<div>State: <span id="state" class="state">idle</span></div>
+<div>Frames: <span id="frames">—</span></div>
+<div class="bar"><div id="bar" style="width:0%"></div></div>
+<pre id="raw">(no poll yet)</pre>
+
+<h3>Rendered output</h3>
+<div id="output"></div>
+
+<script>
+// Turn the thumbnail URL into the matching /progress URL by swapping the path.
+// Apache's rewrite chain at /progress mirrors /thumbnail's, producing the same
+// cache_path key under the hood.
+function progressUrlFor(thumbUrl) {
+  const u = new URL(thumbUrl);
+  u.pathname = '/progress';
+  return u.toString();
+}
+
+const stateEl  = document.getElementById('state');
+const framesEl = document.getElementById('frames');
+const barEl    = document.getElementById('bar');
+const rawEl    = document.getElementById('raw');
+const outEl    = document.getElementById('output');
+
+function render(data) {
+  stateEl.textContent = data.state || 'unknown';
+  stateEl.className = 'state ' + (data.state || '');
+  if (data.frames_total) {
+    framesEl.textContent = `${data.frames_done || 0} / ${data.frames_total}`;
+    const pct = 100 * (data.frames_done || 0) / data.frames_total;
+    barEl.style.width = pct.toFixed(1) + '%';
+  } else if (data.state === 'done') {
+    framesEl.textContent = '—';
+    barEl.style.width = '100%';
+  } else {
+    framesEl.textContent = '—';
+  }
+  rawEl.textContent = JSON.stringify(data, null, 2);
+}
+
+async function pollLoop(progressUrl, stopWhenDone) {
+  while (true) {
+    try {
+      const r = await fetch(progressUrl, {cache: 'no-store'});
+      const data = await r.json();
+      render(data);
+      if (stopWhenDone && (data.state === 'done' || data.state === 'error')) return;
+    } catch (e) {
+      rawEl.textContent = `poll error: ${e}`;
+    }
+    await new Promise(res => setTimeout(res, 500));
+  }
+}
+
+document.getElementById('go').addEventListener('click', () => {
+  const thumbUrl = document.getElementById('url').value.trim();
+  if (!thumbUrl) return;
+  const progUrl = progressUrlFor(thumbUrl);
+
+  outEl.textContent = 'loading…';
+  // Fire the main request: the browser does the heavy GET for the bytes.
+  // Use a fresh URL by appending a cache-buster so the <img>/<video> doesn't
+  // serve from the browser's HTTP cache during demo retries.
+  const cb = '_cb=' + Date.now();
+  const sep = thumbUrl.includes('?') ? '&' : '?';
+  const mainUrl = thumbUrl + sep + cb;
+
+  // Pick the right element by format.
+  const fmt = new URL(thumbUrl).searchParams.get('format') || 'jpg';
+  let el;
+  if (fmt === 'mp4' || fmt === 'webm') {
+    el = document.createElement('video');
+    el.controls = true; el.autoplay = true; el.loop = true; el.muted = true;
+    el.style.maxWidth = '100%';
+  } else {
+    el = document.createElement('img');
+    el.style.maxWidth = '100%';
+  }
+  el.onload = el.onloadeddata = () => { rawEl.textContent += '\n(main asset loaded)'; };
+  el.onerror = () => { rawEl.textContent += '\n(main asset error)'; };
+  el.src = mainUrl;
+  outEl.replaceChildren(el);
+
+  // Poll until done or error. Stop polling when the request resolves so we
+  // don't keep hitting a successful cache.
+  pollLoop(progUrl, true);
+});
+</script>
+</body>
+</html>

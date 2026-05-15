@@ -98,6 +98,51 @@ class ThumbnailGenerator
     # cache and tmp live in the containing directory
     @cache_dir = File.dirname(File.dirname(File.realpath(__FILE__))) + '/cache'
     @tmp_dir = File.dirname(File.dirname(File.realpath(__FILE__))) + '/tmp'
+    @cache_file = nil
+    @last_progress_write_at = nil
+  end
+
+  # Atomically merge fields into <cache_file>.progress so a client polling
+  # /progress can read a consistent JSON snapshot. Throttled to ~10 Hz for
+  # frames_done updates; state transitions always write.
+  def write_progress(state: nil, frames_done: nil, frames_total: nil,
+                     delegated_to: nil, message: nil)
+    return unless @cache_file
+    progress_path = "#{@cache_file}.progress"
+    prev = {}
+    if File.exists?(progress_path)
+      begin
+        prev = JSON.parse(File.read(progress_path))
+      rescue JSON::ParserError
+        prev = {}
+      end
+    end
+
+    new_state = prev.dup
+    new_state['state']        = state         if state
+    new_state['frames_done']  = frames_done   if frames_done
+    new_state['frames_total'] = frames_total  if frames_total
+    new_state['delegated_to'] = delegated_to  if delegated_to
+    new_state['message']      = message       if message
+    new_state['updated_at']   = Time.now.to_f
+    new_state['pid']        ||= Process.pid
+    new_state['host']       ||= (ENV['HTTP_HOST'] || `hostname`.chomp)
+
+    state_changed = state && state != prev['state']
+    now = Time.now.to_f
+    elapsed = @last_progress_write_at ? (now - @last_progress_write_at) : Float::INFINITY
+    return if !state_changed && elapsed < 0.1  # throttle frames_done floods
+
+    FileUtils.mkdir_p(File.dirname(progress_path))
+    tmp_path = "#{progress_path}.tmp.#{Process.pid}.#{rand(1 << 32)}"
+    File.open(tmp_path, 'w') { |f| f.write(JSON.generate(new_state)) }
+    File.rename(tmp_path, progress_path)
+    @last_progress_write_at = now
+  end
+
+  def clear_progress
+    return unless @cache_file
+    File.unlink("#{@cache_file}.progress") rescue nil
   end
 
   def make_chrome(shardno, url)
@@ -170,6 +215,7 @@ class ThumbnailGenerator
     if $lockdir
       @semaphore = FlockSemaphore.new($lockdir)
       set_status('waiting')
+      write_progress(state: 'waiting')
       while true
         lock = @semaphore.captureNonblock
         if lock
@@ -921,6 +967,7 @@ class ThumbnailGenerator
     # Cap the pixel-stream copy at exactly this many bytes so the trailing
     # stats JSON line never gets piped into ffmpeg.
     @export_total_pixel_bytes = render['total_pixel_bytes']
+    write_progress(state: 'rendering', frames_total: @nframes)
 
     @is_video = (@format == 'mp4' or @format == 'webm' or @format == 'zip') ? true : false
     @raw_formats = ['rgb24', 'gray8']
@@ -989,11 +1036,29 @@ class ThumbnailGenerator
     ff_out.close
 
     pump_err = nil
+    @export_frames_done = 0
     pump_thread = Thread.new {
       begin
-        # Bounded copy so the exporter's trailing JSON line stays on its
-        # stdout for us to consume after encode_frames returns.
-        IO.copy_stream(@export_pixel_stream, ff_in, @export_total_pixel_bytes)
+        # Per-frame bounded copies. IO.copy_stream stays in C (no Ruby string
+        # allocation, may use splice(2) for pipe-to-pipe). Bounding by frame
+        # rather than total bytes gives us a frame-granular progress counter
+        # and keeps the exporter's trailing JSON line on its stdout for us
+        # to read after encode_frames returns.
+        bytes_per_frame = @output_width * @output_height * 3
+        last_log = Time.now
+        @nframes.times do |i|
+          copied = IO.copy_stream(@export_pixel_stream, ff_in, bytes_per_frame)
+          if copied < bytes_per_frame
+            raise "exporter EOF mid-frame at frame #{i}: got #{copied}/#{bytes_per_frame} bytes"
+          end
+          @export_frames_done = i + 1
+          write_progress(frames_done: @export_frames_done)
+          if Time.now - last_log > 1.0
+            vlog(0, "exporter→ffmpeg: #{@export_frames_done}/#{@nframes} frames")
+            last_log = Time.now
+          end
+        end
+        vlog(0, "exporter→ffmpeg: #{@export_frames_done}/#{@nframes} frames complete")
       rescue => e
         pump_err = e
       ensure
@@ -1259,6 +1324,7 @@ class ThumbnailGenerator
     url = "https://#{thumbnail_worker_hostname}#{ENV['REQUEST_URI']}"
     url += "&workerepoch=#{(Time.now.to_f * 1000).round}"
     $stats['delegatedTo'] = url
+    write_progress(state: 'delegated', delegated_to: thumbnail_worker_hostname)
     vlog(0, "CHECKPOINTTHUMBNAIL DELEGATION_START #{JSON.generate($stats)}")
     vlog(0, "Delegating thumbnail to #{thumbnail_worker_hostname}")
 
@@ -1325,6 +1391,7 @@ class ThumbnailGenerator
         # Running in CGI mode;  enable cache
         cache_path = ENV['QUERY_STRING'].split("cachepath=")[1]
         cache_file = "#{@cache_dir}#{cache_path}"
+        @cache_file = cache_file
 
         FileUtils.mkdir_p(File.dirname(cache_file))
 
@@ -1422,6 +1489,7 @@ class ThumbnailGenerator
 
       if not image_data
         vlog(0, "Not found in cache; computing")
+        write_progress(state: 'starting')
         $request_url = ENV['REQUEST_SCHEME'] + '://' + ENV['HTTP_HOST'] + ENV['REQUEST_URI']
         vlog(0, "STARTTHUMBNAIL #{$request_url}")
         vlog(0, "CHECKPOINTTHUMBNAIL START #{JSON.generate($stats)}")
@@ -1462,6 +1530,7 @@ class ThumbnailGenerator
           end
           File.rename @tmpfile, final_file
           vlog(0, "Moved output file to cache: #{final_file}")
+          clear_progress
         else
           vlog(0, "Deleted output file");
           File.unlink @tmpfile
@@ -1515,7 +1584,8 @@ class ThumbnailGenerator
           bytes = Rack::Utils.get_byte_ranges(ENV['HTTP_RANGE'], size)[0]
           offset = bytes.begin
           length = (bytes.end - bytes.begin) + 1
-          @cgi.out('type' => mime_type, 'Accept-Ranges' => 'bytes', 'Content-Range' => "bytes #{bytes.begin}-#{bytes.end}/#{size}", 'Content-Length' => length, 'status' => "206") {image_data}
+          body = image_data.byteslice(offset, length)
+          @cgi.out('type' => mime_type, 'Accept-Ranges' => 'bytes', 'Content-Range' => "bytes #{bytes.begin}-#{bytes.end}/#{size}", 'Content-Length' => body.bytesize, 'status' => "206") {body}
         else
           @cgi.out('type' => mime_type) {image_data}
         end
@@ -1526,6 +1596,15 @@ class ThumbnailGenerator
     rescue Exception => e
       STDERR.puts e.backtrace.join("\n")
       $stats['FATALERROR'] = "#{e}\n#{e.backtrace.join("\n")}"
+      # Strip any embedded Python traceback (from forwarded exporter stderr)
+      # but keep its final non-empty line, which is usually the actual error.
+      progress_msg = e.to_s.dup
+      if progress_msg.include?('Traceback (most recent call last):')
+        header = progress_msg.sub(/\s*Traceback \(most recent call last\):.*\z/m, '').strip
+        tail   = progress_msg.lines.map(&:strip).reject(&:empty?).last
+        progress_msg = tail ? "#{header} #{tail}" : header
+      end
+      write_progress(state: 'server_error', message: progress_msg[0, 500]) rescue nil
       vlog(0, "CHECKPOINTTHUMBNAIL FATALERROR #{JSON.generate($stats)}")
       $debug.insert 0, "400: Bad Request<br>"
       $debug.insert 2, "<pre>#{e}\n#{e.backtrace.join("\n")}</pre>"
@@ -1538,4 +1617,4 @@ class ThumbnailGenerator
   end
 end
 
-ThumbnailGenerator.new.serve_thumbnail(cgi)
+ThumbnailGenerator.new.serve_thumbnail(cgi) if __FILE__ == $0
