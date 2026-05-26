@@ -30,6 +30,7 @@ require 'net/http'
 require 'open3'
 require 'selenium-webdriver'
 require 'rack'
+require_relative 'breathecam_annotations'
 
 load File.dirname(File.realpath(__FILE__)) + '/mercator.rb'
 load File.dirname(File.realpath(__FILE__)) + '/point.rb'
@@ -754,6 +755,23 @@ class ThumbnailGenerator
       @cgi.params['watermark'][0].split("|").each_with_index do |text_line, idx|
         label += ",drawtext=fontfile=./fonts/WorkSans-Bold.ttf:text='#{text_line}':fontsize=14:fontcolor=white@0.30:borderw=1:bordercolor=black@0.25:x=w-tw-4:y=h-th-4-#{idx*18}"
       end
+    end
+
+    # Breathecam time + camera-name overlays. In the from-screenshot pipeline
+    # Chrome paints these from the breathecam.org JS UI; the from-export
+    # pipeline never invokes the page, so we paint them with drawtext here to
+    # keep parity. See breathecam_annotations.rb.
+    if @from_export and @export_meta['thumbnail'] and @export_meta['thumbnail']['s']
+      label += BreathecamAnnotations.filter_fragments(
+        capture_times:    @export_meta['timemachine']['capture_times'],
+        frame_indices:    @export_meta['render']['frame_indices'],
+        camera_shortname: @export_meta['thumbnail']['s'],
+        output_width:     @output_width,
+        output_height:    @output_height,
+        nframes:          @nframes,
+        desired_fps:      @desired_fps,
+        tmpfile_prefix:   @tmpfile,
+      )
     end
 
     start_dwell_in_sec = @cgi.params['startDwell'][0].to_f
