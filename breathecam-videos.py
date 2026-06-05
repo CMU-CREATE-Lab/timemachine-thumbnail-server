@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import cgi, codecs, json, os, subprocess, sys, urllib
+import codecs, json, os, subprocess, sys, urllib.parse, html
 
 sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
 
@@ -78,7 +78,7 @@ for id in reversed(ids):
         continue
     if 'preview' in queryparams:
         continue
-    root = cgi.escape(queryparams['root'][0])
+    root = html.escape(queryparams['root'][0], quote=False)
     if root[:len(root_prefix)] != root_prefix:
         continue
     format = queryparams['format'][0]

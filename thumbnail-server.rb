@@ -46,7 +46,7 @@ $breathecam_export_path = File.dirname(File.realpath(__FILE__)) + '/venv/bin/bre
 $num_threads = 8
 
 config_path = File.dirname(File.realpath(__FILE__)) + '/config.json'
-if File.exists? config_path
+if File.exist? config_path
   $config = open(config_path) {|i| JSON.parse(i.read)}
 else
   $config = {}
@@ -57,7 +57,7 @@ if $config['lockdir']
   $lockdir = $config['lockdir']
 else
   default_lockdir = File.dirname(File.dirname(File.realpath(__FILE__))) + '/locks'
-  if File.exists? default_lockdir
+  if File.exist? default_lockdir
     $lockdir = default_lockdir
   end
 end
@@ -111,7 +111,7 @@ class ThumbnailGenerator
     return unless @cache_file
     progress_path = "#{@cache_file}.progress"
     prev = {}
-    if File.exists?(progress_path)
+    if File.exist?(progress_path)
       begin
         prev = JSON.parse(File.read(progress_path))
       rescue JSON::ParserError
@@ -151,10 +151,16 @@ class ThumbnailGenerator
     options = Selenium::WebDriver::Chrome::Options.new
     options.add_argument('--headless')
     options.add_argument('--hide-scrollbars')
-    if File.exists?('/.dockerenv')
+    if ENV['IN_CONTAINER'] || File.exist?('/.dockerenv')
       options.add_argument('--disable-gpu')
       options.add_argument('--no-sandbox')
       options.add_argument('--disable-dev-shm-usage')
+      # EarthTime/Timemachine is WebGL; Chrome 137+ dropped the software-WebGL
+      # (SwiftShader) fallback in headless unless this flag is set. Without it,
+      # WebGL is unavailable, the viewer never finishes loading, and isLoaded()
+      # stays false forever. "unsafe" just means software rendering of untrusted
+      # content, which is fine for our own headless captures.
+      options.add_argument('--enable-unsafe-swiftshader')
     end
     driver = Selenium::WebDriver.for :chrome, options: options
     if $config['override_headless']
@@ -387,7 +393,7 @@ class ThumbnailGenerator
 
     tm_url = "#{@root}/tm.json"
     $debug << "tm_url: #{tm_url}<br>"
-    @tm = open(tm_url) {|i| JSON.parse(i.read)}
+    @tm = URI.open(tm_url) {|i| JSON.parse(i.read)}
     $debug << JSON.dump(@tm)
     $debug << "<hr>"
 
@@ -400,7 +406,7 @@ class ThumbnailGenerator
 
     r_url = "#{@root}/#{@dataset['id']}/r.json"
     $debug << "r_url: #{r_url}<br>"
-    @r = open(r_url) {|i| JSON.parse(i.read)}
+    @r = URI.open(r_url) {|i| JSON.parse(i.read)}
     $debug << JSON.dump(@r)
     $debug << "<br>"
 
@@ -444,7 +450,7 @@ class ThumbnailGenerator
       total_chrome_frames = 0
 
       @tmpfile_screenshot_input_path = "#{@tmp_dir}/screenshots.#{Process.pid}.#{(Time.now.to_f)}"
-      FileUtils.mkdir_p(@tmpfile_screenshot_input_path) unless File.exists?(@tmpfile_screenshot_input_path)
+      FileUtils.mkdir_p(@tmpfile_screenshot_input_path) unless File.exist?(@tmpfile_screenshot_input_path)
 
       screenshot_playback_rate = (100.0 / @screenshot_playback_speed)
       video_duration_in_secs = (@screenshot_end_time_as_render_time - @screenshot_begin_time_as_render_time) /  (@viewer_max_playback_rate / screenshot_playback_rate)
@@ -1486,7 +1492,7 @@ class ThumbnailGenerator
         compute_file = nil
 
         while true
-          if File.exists?(cache_file) and not recompute
+          if File.exist?(cache_file) and not recompute
             vlog(0, "Found in cache.")
             $debug << "Found in cache."
             image_data = open(cache_file, 'rb') {|i| i.read}
@@ -1556,7 +1562,16 @@ class ThumbnailGenerator
             File.open(cache_file, 'w') { |file| file.write(json_data) }
             final_file = cache_file2
           end
-          File.rename @tmpfile, final_file
+          # Publish atomically. @tmpfile lives in @tmp_dir, which may be on a
+          # different filesystem than the cache (e.g. local scratch vs an NFS
+          # cache mount), so a bare File.rename can fail with EXDEV. Stage a
+          # copy into the cache directory, then rename within it (same-fs,
+          # atomic) so Apache never serves a half-written file.
+          FileUtils.mkdir_p(File.dirname(final_file))
+          staging = "#{final_file}.tmp.#{Process.pid}.#{rand(1 << 32)}"
+          FileUtils.cp(@tmpfile, staging)
+          File.rename(staging, final_file)
+          File.unlink(@tmpfile)
           vlog(0, "Moved output file to cache: #{final_file}")
           clear_progress
         else

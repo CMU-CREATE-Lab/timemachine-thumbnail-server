@@ -16,7 +16,7 @@ class StatInstance
   
   def get_hostname
     if not @hostname
-      @hostname = `hostname`.trim
+      @hostname = `hostname`.strip
     end
     return @hostname
   end

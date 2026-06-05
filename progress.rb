@@ -48,16 +48,16 @@ cache_file    = "#{CACHE_DIR}#{cache_path}"
 progress_path = "#{cache_file}.progress"
 
 # Cache file exists → compute finished.
-if File.exists?(cache_file)
+if File.exist?(cache_file)
   emit({state: 'done'})
   exit
 end
 
-unless File.exists?(progress_path)
+unless File.exist?(progress_path)
   # Tiny race: cache_file may have appeared between the check above and now,
   # e.g. the worker finished writing right after we looked. Recheck before
   # giving up to "unknown".
-  if File.exists?(cache_file)
+  if File.exist?(cache_file)
     emit({state: 'done'})
     exit
   end
@@ -69,7 +69,7 @@ data = begin
   JSON.parse(File.read(progress_path))
 rescue Errno::ENOENT
   # Raced with the writer's rename or with clear_progress on completion.
-  if File.exists?(cache_file)
+  if File.exist?(cache_file)
     emit({state: 'done'})
     exit
   end
