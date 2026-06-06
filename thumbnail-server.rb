@@ -107,7 +107,7 @@ class ThumbnailGenerator
   # /progress can read a consistent JSON snapshot. Throttled to ~10 Hz for
   # frames_done updates; state transitions always write.
   def write_progress(state: nil, frames_done: nil, frames_total: nil,
-                     delegated_to: nil, message: nil)
+                     message: nil)
     return unless @cache_file
     progress_path = "#{@cache_file}.progress"
     prev = {}
@@ -123,7 +123,6 @@ class ThumbnailGenerator
     new_state['state']        = state         if state
     new_state['frames_done']  = frames_done   if frames_done
     new_state['frames_total'] = frames_total  if frames_total
-    new_state['delegated_to'] = delegated_to  if delegated_to
     new_state['message']      = message       if message
     new_state['updated_at']   = Time.now.to_f
     new_state['pid']        ||= Process.pid
@@ -253,29 +252,25 @@ class ThumbnailGenerator
     end
   end
 
+  # Acquire a local concurrency slot so a single worker (pod) doesn't run too
+  # many Chrome renders at once. In the shared-cache Kubernetes model this is
+  # purely a per-pod cap: cross-worker distribution is handled by the ingress
+  # load balancer, and there is no cross-host delegation. (Each lock token in
+  # $lockdir is just a slot; its filename is no longer interpreted as a target.)
   def acquire_screenshot_semaphore()
     if $lockdir
       @semaphore = FlockSemaphore.new($lockdir)
       set_status('waiting')
       write_progress(state: 'waiting')
-      while true
-        lock = @semaphore.captureNonblock
-        if lock
-          vlog(0, "Captured resource lock #{lock} from #{$lockdir}")
-          break
-        else
-          vlog(0, "Waiting to capture resource lock in #{$lockdir}")
-        end
+      until (lock = @semaphore.captureNonblock)
+        vlog(0, "Waiting to capture resource lock in #{$lockdir}")
         sleep(1)
       end
+      vlog(0, "Captured resource lock #{lock} from #{$lockdir}")
       set_status(nil)
-      thumbnail_worker_hostname = File.basename(lock).split('+')[1]
-      vlog(0, "Thumbnail worker #{thumbnail_worker_hostname}")
-      return thumbnail_worker_hostname
     else
       @semaphore = nil
       vlog(0, "No lockdir; skipping semaphore capture")
-      return 'localhost'
     end
   end
 
@@ -1391,36 +1386,6 @@ class ThumbnailGenerator
     end
   end
 
-  def delegate_thumbnail(thumbnail_worker_hostname)
-    set_status('delegated')
-    url = "https://#{thumbnail_worker_hostname}#{ENV['REQUEST_URI']}"
-    url += "&workerepoch=#{(Time.now.to_f * 1000).round}"
-    $stats['delegatedTo'] = url
-    write_progress(state: 'delegated', delegated_to: thumbnail_worker_hostname)
-    vlog(0, "CHECKPOINTTHUMBNAIL DELEGATION_START #{JSON.generate($stats)}")
-    vlog(0, "Delegating thumbnail to #{thumbnail_worker_hostname}")
-
-    uri = URI.parse(url)
-    http = Net::HTTP.new(uri.host, uri.port)
-    http.use_ssl = true
-    http.read_timeout = 3600 # wait 1 hour.  workers should abort before then
-    response = http.get(URI(url))
-
-    vlog(0, "Thumbnail returned from #{thumbnail_worker_hostname}, status code #{response.code}, body length #{response.body.size}")
-    vlog(0, "CHECKPOINTTHUMBNAIL DELEGATION_FINISHED #{JSON.generate($stats)}")
-    if response.code == "200"
-      File.open(@tmpfile, 'w') { |file| file.write(response.body) }
-    else
-      exception_text = "Thumbnail delegation to #{thumbnail_worker_hostname} failed with status code #{response.code} and "
-      if response.body.ascii_only?
-        exception_text += "response body #{response.body}"
-      else
-        exception_text += "non-ascii response body of length #{response.body.length}"
-      end
-      raise exception_text
-    end
-  end
-
   def serve_thumbnail(cgi)
     @cgi = cgi
     @from_screenshot = false
@@ -1504,6 +1469,15 @@ class ThumbnailGenerator
       #   If thumbnail is in cache use it, done
       #   Create and attempt to (non-blocking) acquire lock on <cachepath>.compute
       #   Acquired? break from loop
+      #
+      # This is the cross-worker dedup: only the process holding the .compute
+      # flock computes a given thumbnail; others spin until the cache appears.
+      # It works across pods/nodes because the cache is an NFSv4 mount with
+      # local_lock=none, so flock is coordinated by the NFS server rather than
+      # held locally. NFSv4 leases are auto-renewed by the client, so the lock
+      # is held for the full compute (even tens of minutes) and is reclaimed
+      # only if the holder dies. If the cache ever moves to a filesystem where
+      # flock is not server-coordinated, switch this to an O_EXCL marker file.
 
       @from_screenshot = @cgi.params.has_key?('fromScreenshot')
       @from_export = @cgi.params.has_key?('fromExport')
@@ -1567,19 +1541,14 @@ class ThumbnailGenerator
         vlog(0, "CHECKPOINTTHUMBNAIL START #{JSON.generate($stats)}")
         @tmpfile = "#{@tmp_dir}/#{Process.pid}.#{(Time.now.to_f)}.#{@format}"
 
+        # Cap concurrent renders on this worker (no cross-host delegation: the
+        # cache is shared via NFS and ingress distributes across workers).
         if @from_screenshot
-          thumbnail_worker_hostname = acquire_screenshot_semaphore()
+          acquire_screenshot_semaphore()
         end
-
-        if @from_screenshot and thumbnail_worker_hostname != 'localhost'
-          # Writes to @tmpfile
-          $status_url = "https://#{thumbnail_worker_hostname}/status?id=#{Process.pid}:#{$id}"
-          delegate_thumbnail(thumbnail_worker_hostname)
-        else
-          $status_url = "#{File.dirname(ENV.to_hash['SCRIPT_URI'])}/status?id=#{Process.pid}:#{$id}"
-          # Writes to @tmpfile
-          compute_thumbnail()
-        end
+        $status_url = "#{File.dirname(ENV.to_hash['SCRIPT_URI'])}/status?id=#{Process.pid}:#{$id}"
+        # Writes to @tmpfile
+        compute_thumbnail()
 
         image_data = open(@tmpfile, 'rb') {|i| i.read}
         $stats['sizeBytes'] = image_data.size
@@ -1596,7 +1565,8 @@ class ThumbnailGenerator
             # JSON that contains the thumbnail capture bounds, url to the thumbnail, which host did the capturing, etc.
             # We save it using the original URL path, that includes the &asJson=true parameter.
             thumbnail_request_url = $request_url.gsub("&asJson=true", "")
-            json_data = JSON.pretty_generate({"thumbnail-capture-bounds" => @aux_info['lat_lon_capture_bounds'], "thumbnail-url" => thumbnail_request_url, "thumbnail-worker-hostname" => thumbnail_worker_hostname})
+            worker_hostname = ENV['POD_NAME'] || `hostname`.chomp
+            json_data = JSON.pretty_generate({"thumbnail-capture-bounds" => @aux_info['lat_lon_capture_bounds'], "thumbnail-url" => thumbnail_request_url, "thumbnail-worker-hostname" => worker_hostname})
             File.open(cache_file, 'w') { |file| file.write(json_data) }
             final_file = cache_file2
           end
