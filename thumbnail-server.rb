@@ -146,6 +146,30 @@ class ThumbnailGenerator
     File.unlink("#{@cache_file}.progress") rescue nil
   end
 
+  # Read width/height straight from a PNG's IHDR (bytes 16..23, big-endian)
+  # without needing an image library. Used only for size instrumentation.
+  def png_dimensions(path)
+    File.open(path, 'rb') do |f|
+      header = f.read(24)
+      return nil unless header && header.bytesize == 24 && header.byteslice(0, 8) == "\x89PNG\r\n\x1a\n".b
+      return header.byteslice(16, 8).unpack('N2')
+    end
+  rescue StandardError
+    nil
+  end
+
+  # Log requested-vs-actual sizing for a driver: the window size, the page
+  # viewport, and devicePixelRatio. Helps diagnose Chrome window/aspect issues.
+  def log_chrome_sizing(shardno, driver, label)
+    win = (driver.manage.window.size rescue nil)
+    vp  = (driver.execute_script(
+      "return [window.innerWidth, window.innerHeight, window.outerWidth, window.outerHeight, window.devicePixelRatio];"
+    ) rescue nil)
+    vlog(shardno, "SIZECHECK #{label}: requested=#{@output_width}x#{@output_height} " \
+                  "window=#{win && "#{win.width}x#{win.height}"} " \
+                  "viewport[iw,ih,ow,oh,dpr]=#{vp.inspect}")
+  end
+
   def make_chrome(shardno, url)
     before = Time.now
     options = Selenium::WebDriver::Chrome::Options.new
@@ -170,8 +194,19 @@ class ThumbnailGenerator
     url += '&disableAnimation=true'
     vlog(shardno, "make_chrome loading #{url}")
 
-    # Resize the window to desired width/height.
+    # Size the *viewport* to the requested output dimensions. window.resize_to
+    # sizes the outer window, but Chrome 132+ ships only "new" headless, which
+    # reserves browser-UI height inside the window — so the inner viewport (what
+    # gets screenshotted) comes out shorter than requested (e.g. 1280x577 for a
+    # 1280x720 window) and the downstream ffmpeg scale=W:H then stretches it,
+    # breaking the aspect ratio. Emulation.setDeviceMetricsOverride forces the
+    # layout viewport to exactly W x H, so the screenshot is exactly W x H and
+    # the ffmpeg scale becomes a no-op.
     driver.manage.window.resize_to(@output_width, @output_height)
+    driver.execute_cdp('Emulation.setDeviceMetricsOverride',
+                       width: @output_width, height: @output_height,
+                       deviceScaleFactor: 1, mobile: false)
+    log_chrome_sizing(shardno, driver, "after resize_to + setDeviceMetricsOverride (pre-load)")
 
     5.times do |j|
       # Navigate to the page; will block until the load is complete.
@@ -556,6 +591,9 @@ class ThumbnailGenerator
                   screenshot_path = "#{@tmpfile_screenshot_input_path}/#{'%04d' % frame}.png"
                   driver.save_screenshot(screenshot_path)
                   vlog(shardno, "size of screenshot is #{File.size(screenshot_path)}")
+                  dims = png_dimensions(screenshot_path)
+                  log_chrome_sizing(shardno, driver, "at screenshot frame #{frame}")
+                  vlog(shardno, "SIZECHECK screenshot PNG frame #{frame}: requested=#{@output_width}x#{@output_height} actual_png=#{dims && dims.join('x')} (ffmpeg will scale this to #{@output_width}x#{@output_height})")
                 end
                 vlog(shardno, "frame #{frame} took #{((Time.now - before) * 1000).round} ms (chrome frame #{frameno})");
                 n_done = frames_done_mutex.synchronize { frames_done += 1 }
