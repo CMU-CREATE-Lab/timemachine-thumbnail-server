@@ -114,14 +114,14 @@ if len(ids) > num_thumbnails:
 
 print(header_footer)
 
-for id in reversed(ids[-num_thumbnails:]):
+def show_thumbnail(id):
     line = thumbs[id]['STARTTHUMBNAIL']
     tokens = line.split(None, 6)
     url = tokens[5]
     worker = thumbs[id].get('worker', '?')
     queryparams =  urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
     if not 'format' in queryparams:
-        continue
+        return
 
     stats = {}
 
@@ -138,7 +138,7 @@ for id in reversed(ids[-num_thumbnails:]):
 
     if 'ENDTHUMBNAIL' in thumbs[id]:
         if not 'totalTimeSecs' in stats:
-            continue
+            return
         completion_status_msg.append('<h4>Finished</h4>')
         completion_status = 'Finished'
         completion_color = '#55ff55'
@@ -187,7 +187,7 @@ for id in reversed(ids[-num_thumbnails:]):
     print('<h3 style="background-color:%s">%s <a href="status?id=%s">thumbnail %s</a> %s %s <span class="worker">worker %s</span></h3>' %
           (completion_color, completion_status, id, id, tokens[0], tokens[1].split('.')[0], html.escape(worker)))
 
-    print('%s %s x %s' % (queryparams['format'][0], queryparams['width'][0], queryparams['height'][0]))
+    print('%s %s x %s' % (queryparams['format'][0], queryparams.get('width', ['?'])[0], queryparams.get('height', ['?'])[0]))
     if 'videoFrameCount' in stats:
         print(' x %s frames' % stats['videoFrameCount'])
 
@@ -204,7 +204,7 @@ for id in reversed(ids[-num_thumbnails:]):
     if request:
         print(request)
 
-    print('<h4>Root</h4>\n%s<br>\n' % html.escape(queryparams['root'][0]))
+    print('<h4>Root</h4>\n%s<br>\n' % html.escape(queryparams.get('root', [''])[0]))
 
     print('<h4>Worker</h4>\n%s<br>\n' % html.escape(worker))
 
@@ -215,5 +215,14 @@ for id in reversed(ids[-num_thumbnails:]):
     if show_id:
         print('<h4>Full log</h4>')
         print('<pre>%s</pre><br>' % html.escape(''.join(all_lines)))
+
+
+# Render each thumbnail; never let one malformed log entry blank the whole page.
+for id in reversed(ids[-num_thumbnails:]):
+    try:
+        show_thumbnail(id)
+    except Exception as e:
+        print('<p style="color:#a00">(could not render thumbnail %s: %s)</p>'
+              % (html.escape(str(id)), html.escape(str(e))))
 
 print(header_footer)
