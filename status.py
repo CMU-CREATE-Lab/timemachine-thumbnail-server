@@ -29,6 +29,22 @@ LOKI_URL = os.environ.get('LOKI_URL', 'http://loki.observability.svc.cluster.loc
 LOKI_NAMESPACE = os.environ.get('LOKI_NAMESPACE', 'thumbnails')
 MY_POD = os.environ.get('POD_NAME')
 
+# Grafana base for "view logs" deep links. They target the provisioned
+# "Thumbnail logs" dashboard (uid tt-logs), whose panel finds Loki by datasource
+# type (so no Loki-uid dependency). Grafana is internal-only, so these links work
+# for operators on the SSH SOCKS tunnel.
+GRAFANA_URL = os.environ.get('GRAFANA_URL', 'https://grafana.internal.createlab.org').rstrip('/')
+
+def grafana_logs_url(req_id='', worker=None, span='now-2d'):
+    q = [('var-id', req_id), ('from', span), ('to', 'now')]
+    if worker and worker != '?':
+        q.append(('var-worker', worker))
+    return GRAFANA_URL + '/d/tt-logs/thumbnail-logs?' + urllib.parse.urlencode(q)
+
+print('<p><a href="%s" target="_blank" rel="noopener">Open thumbnail logs in Grafana &#8599;</a> '
+      '<span class="worker">(internal; via the SSH SOCKS tunnel to hal49)</span></p>'
+      % html.escape(grafana_logs_url()))
+
 thumbs = {}
 
 if 'id' in params:
@@ -211,7 +227,7 @@ def show_thumbnail(id):
     print('<h4>Raw stats</h4>')
     if stats:
         print('<code>%s</code><br>' % html.escape(json.dumps(stats)))
-    print('<code>More: in Grafana Explore &rarr; Loki: {namespace=&quot;%s&quot;} |= &quot;%s&quot;</code><br>' % (html.escape(LOKI_NAMESPACE), html.escape(id)))
+    print('<a href="%s" target="_blank" rel="noopener">logs in Grafana &#8599;</a><br>' % html.escape(grafana_logs_url(id, worker)))
     if show_id:
         print('<h4>Full log</h4>')
         print('<pre>%s</pre><br>' % html.escape(''.join(all_lines)))
