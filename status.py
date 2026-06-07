@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import codecs, json, os, re, subprocess, sys, urllib.parse, html
+import codecs, json, os, re, sys, urllib.parse, urllib.request, html, time
 
 sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
 
@@ -12,6 +12,7 @@ print('body { margin-left: 30px }')
 print('h3 { margin-left: -20px; margin-bottom: 0px }')
 print('h4 { margin-left: -10px; margin-bottom: 0px; margin-top:2px }')
 print('pre { margin-top: 0px; margin-bottom: 0px }')
+print('.worker { color: #555; font-weight: normal; font-size: 80% }')
 print('</style>')
 
 if 'QUERY_STRING' in os.environ:
@@ -19,42 +20,74 @@ if 'QUERY_STRING' in os.environ:
 else:
     params = {}
 
-logfile_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/log.txt"
+# Unified log source: query Loki so /status shows every worker, not just the one
+# this request happened to land on. Loki aggregates all pods' stdout (promtail);
+# see lab_kubernetes observability. Single-tenant, so no auth header is needed.
+# There is intentionally no local-file fallback: /status is a debugging view, and
+# if Loki is down we say so rather than show a misleading single-worker picture.
+LOKI_URL = os.environ.get('LOKI_URL', 'http://loki.observability.svc.cluster.local:3100')
+LOKI_NAMESPACE = os.environ.get('LOKI_NAMESPACE', 'thumbnails')
+MY_POD = os.environ.get('POD_NAME')
 
 thumbs = {}
 
 if 'id' in params:
     show_id = params['id'][0]
-    if not re.match(r'[\d:]+', show_id):
+    if not re.match(r'^[\d:]+$', show_id):
         print('Illegal format for id')
         exit(-1)
-    max_size = 1000 * 1e6 # 1 GB
-    print('<h2>Showing detail for thumbnail request %s</h2>' % show_id)
+    lookback_secs = 7 * 24 * 3600   # a specific request may be older
+    print('<h2>Showing detail for thumbnail request %s</h2>' % html.escape(show_id))
 else:
     show_id = None
-    max_size = 100 * 1e6 # 100 MB
-
-log_size = os.path.getsize(logfile_path)
-
-if log_size > max_size:
-    print('Logfile is %.1f MB, only reading last %.1f MB<br>' % (log_size / 1e6, max_size / 1e6))
-    
-cmd = 'tail --bytes=%d "%s" | tail --lines=+2' % (max_size, logfile_path)
-
-if show_id:
-    cmd += ' | grep %s' % show_id
-
-p = subprocess.Popen(cmd, shell=True, encoding='utf-8', stdout=subprocess.PIPE)
-
-ids = []
+    lookback_secs = 24 * 3600
 
 num_thumbnails = 50
 if 'n' in params:
     num_thumbnails = int(params['n'][0])
 
+# --- Fetch log lines as (sort_key, line, worker) -----------------------------
+
+def fetch_from_loki():
+    # All vlog lines contain the literal "THUMB" (the 3rd field); this also
+    # excludes Apache's own access/error lines that share the container stdout.
+    query = '{namespace="%s"} |= "THUMB"' % LOKI_NAMESPACE
+    if show_id:
+        query += ' |= "%s"' % show_id   # show_id is validated to [\d:]+ above
+    end_ns = time.time_ns()
+    start_ns = end_ns - lookback_secs * 1_000_000_000
+    qs = urllib.parse.urlencode({'query': query, 'start': start_ns, 'end': end_ns,
+                                 'limit': 5000, 'direction': 'backward'})
+    url = '%s/loki/api/v1/query_range?%s' % (LOKI_URL, qs)
+    with urllib.request.urlopen(url, timeout=10) as resp:
+        data = json.load(resp)
+    out = []
+    for stream in data['data']['result']:
+        worker = stream['stream'].get('pod', '?')
+        for ts, line in stream['values']:
+            if not line.endswith('\n'):
+                line += '\n'
+            out.append((int(ts), line, worker))
+    out.sort(key=lambda x: x[0])   # Loki returns newest-first; parse chronologically
+    return out
+
+try:
+    lines = fetch_from_loki()
+except Exception as e:
+    print('<h3 style="background-color:#ff5555">Unified log (Loki) unavailable</h3>')
+    print('<p>Could not query Loki at <code>%s</code>:</p>' % html.escape(LOKI_URL))
+    print('<pre>%s</pre>' % html.escape(str(e)))
+    print('<p>/status reads the cluster-wide log from Loki. If the observability '
+          'stack is down, check <code>kubectl -n observability get pods</code> '
+          'or Grafana, then retry.</p>')
+    sys.exit(0)
+
+# --- Parse (same positional format as the vlog line) -------------------------
+
+ids = []
 all_lines = []
-    
-for line in p.stdout:
+
+for sort_key, line, worker in lines:
     if show_id:
         all_lines.append(line)
     if line.strip() == "":
@@ -71,12 +104,13 @@ for line in p.stdout:
     except:
         continue
     thumbs[id]['last'] = line
+    thumbs[id]['worker'] = worker
     if tokens[4] == 'STARTTHUMBNAIL':
         ids.append(id)
 
 header_footer = ""
 if len(ids) > num_thumbnails:
-    header_footer = '<h3>Showing most recent %d thumbnails.  <i><a href="%s?n=%d">show twice as many</a></i></h3>' % (num_thumbnails, os.environ['SCRIPT_URL'], num_thumbnails * 2)
+    header_footer = '<h3>Showing most recent %d thumbnails.  <i><a href="%s?n=%d">show twice as many</a></i></h3>' % (num_thumbnails, os.environ.get('SCRIPT_URL', 'status'), num_thumbnails * 2)
 
 print(header_footer)
 
@@ -84,6 +118,7 @@ for id in reversed(ids[-num_thumbnails:]):
     line = thumbs[id]['STARTTHUMBNAIL']
     tokens = line.split(None, 6)
     url = tokens[5]
+    worker = thumbs[id].get('worker', '?')
     queryparams =  urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
     if not 'format' in queryparams:
         continue
@@ -137,9 +172,11 @@ for id in reversed(ids[-num_thumbnails:]):
             completion_status = 'In progress'
             completion_color = '#ffff55'
             completion_status_msg.append('%s<br>' % html.escape(url))
-            if not os.path.exists('/proc/%s' % pid):
-                completion_status_msg.append('(pid %s seems not to exist; maybe done now?)<br>' % pid)
-                
+            # The /proc liveness hint is only meaningful when the request ran on
+            # *this* pod; across workers we can't see a remote pid.
+            if MY_POD and worker == MY_POD and not os.path.exists('/proc/%s' % pid):
+                completion_status_msg.append('(pid %s on this worker seems not to exist; maybe done now?)<br>' % pid)
+
         if 'Need' in thumbs[id]:
             completion_status_msg.append('<code>%s</code><br>' % thumbs[id]['Need'])
 
@@ -147,8 +184,8 @@ for id in reversed(ids[-num_thumbnails:]):
             completion_status_msg.append('<h4>Last checkpoint</h4><code>%s</code><br>' % html.escape(thumbs[id]['CHECKPOINTTHUMBNAIL'][0:500]))
         completion_status_msg.append('<h4>Last line</h4><code>%s</code><br>' % html.escape(thumbs[id]['last'][0:500]))
 
-    print('<h3 style="background-color:%s">%s <a href="status?id=%s">thumbnail %s</a> %s %s</h3>' %
-          (completion_color, completion_status, id, id, tokens[0], tokens[1].split('.')[0]))
+    print('<h3 style="background-color:%s">%s <a href="status?id=%s">thumbnail %s</a> %s %s <span class="worker">worker %s</span></h3>' %
+          (completion_color, completion_status, id, id, tokens[0], tokens[1].split('.')[0], html.escape(worker)))
 
     print('%s %s x %s' % (queryparams['format'][0], queryparams['width'][0], queryparams['height'][0]))
     if 'videoFrameCount' in stats:
@@ -166,16 +203,15 @@ for id in reversed(ids[-num_thumbnails:]):
         request += "<b>Browser:</b> %s " % stats['HTTP_USER_AGENT']
     if request:
         print(request)
-        
+
     print('<h4>Root</h4>\n%s<br>\n' % html.escape(queryparams['root'][0]))
-        
-    if 'delegatedTo' in stats:
-        print('<h4>Delegated to</h4>\n%s<br>\n' % html.escape(stats['delegatedTo']))
+
+    print('<h4>Worker</h4>\n%s<br>\n' % html.escape(worker))
 
     print('<h4>Raw stats</h4>')
     if stats:
         print('<code>%s</code><br>' % html.escape(json.dumps(stats)))
-    print('<code>More: grep %s %s</code><br>' % (':'.join(id.split(':')[0:2]), logfile_path))
+    print('<code>More: in Grafana Explore &rarr; Loki: {namespace=&quot;%s&quot;} |= &quot;%s&quot;</code><br>' % (html.escape(LOKI_NAMESPACE), html.escape(id)))
     if show_id:
         print('<h4>Full log</h4>')
         print('<pre>%s</pre><br>' % html.escape(''.join(all_lines)))
