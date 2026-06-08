@@ -159,11 +159,15 @@ def show_thumbnail(id):
         completion_status = 'Finished'
         completion_color = '#55ff55'
 
-        if 'videoFrameCount' in stats:
-            completion_status_msg.append('%d frames in %.1f seconds (%.1f frames rendered per second)<br>' %
-                                         (stats['videoFrameCount'], stats['totalTimeSecs'], stats['videoFrameCount'] / stats['totalTimeSecs']))
+        fc = stats.get('videoFrameCount')
+        secs = stats.get('totalTimeSecs')
+        if fc and secs and fc > 1:
+            completion_status_msg.append('%d frames in %.1f seconds (%.1f frames per second)<br>' %
+                                         (fc, secs, fc / secs))
+        elif fc and secs:
+            completion_status_msg.append('%d frame in %.1f seconds<br>' % (fc, secs))
         else:
-            completion_status_msg.append('Took %.1f seconds<br>' % (stats['totalTimeSecs']))
+            completion_status_msg.append('Took %.1f seconds<br>' % (secs))
         if 'frameEfficiency' in stats:
             completion_status_msg.append('Frame efficiency %.1f%%<br>' % (stats['frameEfficiency'] * 100))
         if 'recompute' in url:
@@ -203,9 +207,22 @@ def show_thumbnail(id):
     print('<h3 style="background-color:%s">%s <a href="status?id=%s">thumbnail %s</a> %s %s <span class="worker">worker %s</span></h3>' %
           (completion_color, completion_status, id, id, tokens[0], tokens[1].split('.')[0], html.escape(worker)))
 
-    print('%s %s x %s' % (queryparams['format'][0], queryparams.get('width', ['?'])[0], queryparams.get('height', ['?'])[0]))
+    codepath = stats.get('codepath')
+    if not codepath:
+        # Infer the codepath for thumbnails logged before it was recorded.
+        if 'breathecamExport' in stats:
+            codepath = 'breathecam_export'
+        elif 'frameEfficiency' in stats or 'nshards' in stats:
+            codepath = 'screenshot'
+        elif stats:
+            codepath = 'timemachine_export'
+        else:
+            codepath = '?'
+
+    dims = '%s %s x %s' % (queryparams['format'][0], queryparams.get('width', ['?'])[0], queryparams.get('height', ['?'])[0])
     if 'videoFrameCount' in stats:
-        print(' x %s frames' % stats['videoFrameCount'])
+        dims += ' x %s frames' % stats['videoFrameCount']
+    print('<b>%s</b> &middot; %s' % (html.escape(codepath), dims))
 
     print('\n'.join(completion_status_msg))
 

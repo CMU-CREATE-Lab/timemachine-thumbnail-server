@@ -1494,6 +1494,17 @@ class ThumbnailGenerator
       elsif @from_export and @from_screenshot
         raise "Cannot specify both fromScreenshot and fromExport"
       end
+
+      # Record which rendering pipeline handles this request so /status can show
+      # it. Set before the first CHECKPOINTTHUMBNAIL so it appears for
+      # in-progress and failed thumbnails too.
+      $stats['codepath'] = if @from_screenshot
+                             'screenshot'
+                           elsif @from_export
+                             'breathecam_export'
+                           else
+                             'timemachine_export'
+                           end
       image_data = nil
 
       if cache_file
@@ -1552,6 +1563,11 @@ class ThumbnailGenerator
 
         image_data = open(@tmpfile, 'rb') {|i| i.read}
         $stats['sizeBytes'] = image_data.size
+        # Frame count for /status. The screenshot path already set this in
+        # capture_frames_from_screenshot; the timemachine/export paths set
+        # @nframes, so record it here for a consistent per-frame readout across
+        # codepaths.
+        $stats['videoFrameCount'] ||= @nframes
         $stats['totalTimeSecs'] = Time.now - $begin_time
         pt = Process.times
         $stats['cpuTime'] = pt.utime + pt.stime + pt.cutime + pt.cstime
