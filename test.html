@@ -83,6 +83,20 @@ var tests = [
     {
         title: 'Breathecam Clairton4 (export path, mp4)',
         src: 'https://thumbnails-v2.createlab.org/thumbnail?root=https%3A%2F%2Fbreathecam.org%23v%3D4481%2C2121%2C4848%2C2327%2Cpts%26t%3D712.275%26ps%3D50%26bt%3D20260514232539%26et%3D20260514233221%26startDwell%3D0%26endDwell%3D0%26d%3D2026-05-14%26s%3Dclairton4%26fps%3D9&width=1280&height=720&format=mp4&fps=9&tileFormat=mp4&startDwell=0&endDwell=0&fromScreenshot&minimalUI&watermark=Breathe%20Project%7CCREATE%20Lab'
+    },
+    {
+        // 2023 Google Earth Timelapse tileset (replaces the dead
+        // earthengine.google.org/timelapse/data/20130507 source). Exercises the
+        // timemachine-export path with boundsNWSE (lat/lon -> pixels via
+        // tm.json projection-bounds). frameTime is seconds: 39 frames @ 10fps,
+        // so 0.0 = 1984 and 3.8 = 2022; tileFormat=mp4 is required (no webm
+        // tiles in this bucket).
+        title: 'World JPG from Earth Timelapse (2023 Google tileset, export path)',
+        src: 'https://thumbnails-v2.createlab.org/thumbnail?root=https%3A%2F%2Fstorage.googleapis.com%2Fearthengine-timelapse%2F2023%2Fcmu%2F1984_2022&boundsNWSE=85,-180,-85,180&height=100&frameTime=0&format=jpg&tileFormat=mp4'
+    },
+    {
+        title: 'Pittsburgh 1984-2022 MP4 from Earth Timelapse (2023 Google tileset, export path)',
+        src: 'https://thumbnails-v2.createlab.org/thumbnail?root=https%3A%2F%2Fstorage.googleapis.com%2Fearthengine-timelapse%2F2023%2Fcmu%2F1984_2022&boundsNWSE=40.5,-80.1,40.35,-79.85&width=200&nframes=39&fps=10&format=mp4&tileFormat=mp4'
     }
 ];
 
