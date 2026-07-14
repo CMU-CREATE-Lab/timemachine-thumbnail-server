@@ -75,8 +75,11 @@ Stat.set_hostname('-')
 Stat.set_service('Thumbnails')
 
 cgi = CGI.new
-cgi.params = CGI::parse(ENV.to_hash['REQUEST_URI'])
-cgi.params['root'] = cgi.params.delete('/thumbnail?root')
+# Apache's cache rewrite chain (apache-serve.include) replaces QUERY_STRING
+# with cachepath=..., so recover the client's params from REQUEST_URI. Parse
+# only the part after '?' — CGI::parse on the full URI would glue the path
+# onto the first param's key, losing it (and 'root' whenever it isn't first).
+cgi.params = CGI::parse((ENV.to_hash['REQUEST_URI'] || '').split('?', 2)[1] || '')
 
 $debug = []
 
