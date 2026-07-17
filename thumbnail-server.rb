@@ -1389,6 +1389,48 @@ class ThumbnailGenerator
     end
   end
 
+  # ===========================================================================
+  # LEGACY hal8 CACHE SUPPORT (read-only)
+  #
+  # The pre-2026 thumbnail server (thumbnails.cmucreatelab.org, host hal8) kept
+  # its own cache with an incompatible key scheme: SHA512 of the raw query
+  # string, hex-encoded, stored as <first-3-hex-chars>/<hash>.<format>, with
+  # format defaulting to jpg — vs. this server's scheme of the Apache-rewritten
+  # URL itself as the cache path (see apache-serve.include). The hash is
+  # one-way, so those ~925k entries (53 GB, rendered mostly 2015-2018, some
+  # from sources that no longer exist) cannot be bulk-converted; an entry can
+  # only be recognized when the exact same query string arrives again.
+  #
+  # So: on a cache miss, before rendering, serve_thumbnail hashes the incoming
+  # query with the old scheme and looks in HAL8_CACHE_DIR (a read-only mount
+  # of hal8's cache; when the directory is absent the feature is off, e.g. in
+  # dev). On a match the old file is copied ("promoted") into this server's
+  # cache at the normal URL-keyed path and served; every later request is then
+  # an ordinary static Apache cache hit. The legacy dir is never written to.
+  #
+  # To retire this: once usage logs show no HAL8PROMOTE lines for a long
+  # window, delete this section and the LEGACY-HAL8 hook in serve_thumbnail,
+  # drop the HAL8_CACHE_DIR env + volume from manifests/thumbnails.yaml, and
+  # archive the mount contents.
+  # ===========================================================================
+
+  HAL8_CACHE_DIR = ENV['HAL8_CACHE_DIR'] || '/app/hal8-cache'
+
+  # Path of the legacy hal8 cache entry for this request, or nil. Must mirror
+  # hal8's exact keying: SHA512 over the verbatim query string as the client
+  # sent it (param order and %-encoding included), extension from the format
+  # param defaulting to jpg. REQUEST_URI carries that verbatim query here
+  # (QUERY_STRING itself was replaced by the cachepath= rewrite; see the
+  # cgi.params parse near the top of this file).
+  def legacy_hal8_cache_file
+    return nil unless File.directory?(HAL8_CACHE_DIR)
+    raw_query = (ENV.to_hash['REQUEST_URI'] || '').split('?', 2)[1]
+    return nil if raw_query.nil? or raw_query.empty?
+    hash = Digest::SHA512.hexdigest(raw_query)
+    path = "#{HAL8_CACHE_DIR}/#{hash[0...3]}/#{hash}.#{@format}"
+    File.file?(path) ? path : nil
+  end
+
   def serve_thumbnail(cgi)
     @cgi = cgi
     @from_screenshot = false
@@ -1523,6 +1565,23 @@ class ThumbnailGenerator
             $debug << "Found in cache."
             image_data = open(cache_file, 'rb') {|i| i.read}
             break
+          end
+
+          # LEGACY-HAL8: miss in our cache — check the old hal8 cache before
+          # rendering (see legacy_hal8_cache_file above). A match is copied to
+          # cache_file (atomic staging+rename, like the post-render publish
+          # below) and the `next` re-enters this loop, whose found-in-cache
+          # branch above then serves it. Skipped for recompute (caller wants a
+          # fresh render — and the branch above would skip the promoted file,
+          # looping forever) and for asJson (cache_file holds JSON metadata,
+          # not image bytes, under that scheme).
+          if not recompute and not @output_as_json and (legacy = legacy_hal8_cache_file)
+            vlog(0, "HAL8PROMOTE #{legacy} -> #{cache_file}")
+            $debug << "Promoted from legacy hal8 cache.<br>"
+            staging = "#{cache_file}.tmp.#{Process.pid}.#{rand(1 << 32)}"
+            FileUtils.cp(legacy, staging)
+            File.rename(staging, cache_file)
+            next
           end
 
           # If file isn't in cache and we've already locked the compute_file, exit loop and compute
